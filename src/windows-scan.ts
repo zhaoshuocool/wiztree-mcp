@@ -59,12 +59,18 @@ export async function scanWindows(wiztree: string, input: WindowsScanInput, deps
   const pngPath = join(temporary, "treemap.png");
   let captured: { entries: WizTreeEntry[]; image?: { type: "image"; data: string; mimeType: string }; csv?: Buffer } & ProcessResult;
   try {
-    const args = [wiztree, input.targetPath, `/export=${csvPath}`,
+    // WizTree's command line expects the switches first and the target path last,
+    // with a trailing separator ("C:\"). A path placed first, or one without the
+    // trailing separator, makes the exporter exit 0 without writing a CSV when a
+    // WizTree GUI instance is already running.
+    const target = /[\\/]$/.test(input.targetPath) ? input.targetPath : `${input.targetPath}\\`;
+    const args = [wiztree, `/export=${csvPath}`,
       `/admin=${input.admin ? 1 : 0}`, `/exportfiles=${input.includeFiles ? 1 : 0}`, `/exportfolders=${input.includeFolders ? 1 : 0}`];
     if (input.filter) args.push(`/filter=${input.filter}`);
     if (input.filterExclude) args.push(`/filterexclude=${input.filterExclude}`);
     if (input.sortBy) args.push(`/sortby=${input.sortBy}`);
     if (input.treemap) args.push(`/treemapimagefile=${pngPath}`, "/treemapimagewidth=1024", "/treemapimageheight=768", "/treemapimagefreespace=0", "/treemapimageshowallocated=1");
+    args.push(target);
     const output = await (deps.run ?? runExportProcess)(args, input.timeoutSeconds, signal);
     signal?.throwIfAborted();
     const entries = await deps.parseCsv(csvPath, signal, input.maxEntries);

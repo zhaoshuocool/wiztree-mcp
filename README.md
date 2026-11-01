@@ -1,6 +1,14 @@
 # WizTree MCP
 
-[日本語](./README.ja.md) | [English](./README.md)
+[中文](./README.zh-CN.md) | [日本語](./README.ja.md) | [English](./README.md)
+
+> **This fork fixes Simplified Chinese (zh-CN) WizTree exports.** Upstream resolves
+> only English and Japanese CSV headers, so a zh-CN export yields `entries: 0` with
+> no error at all, and its exporter argument order silently writes no CSV when a
+> WizTree GUI instance is already running. This branch adds zh-CN headers, moves the
+> target path last with a trailing separator, and collapses doubled separators.
+> See [README.zh-CN.md](./README.zh-CN.md) for the full write-up, install steps and
+> regression tests. Everything below is unchanged upstream documentation.
 
 Disk-usage analysis over MCP. Windows uses WizTree CSV export; macOS uses a
 read-only native metadata scanner. Existing English/Japanese WizTree CSVs remain

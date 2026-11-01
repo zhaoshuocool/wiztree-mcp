@@ -39,6 +39,50 @@ test("Windows successful exporter preserves options and deletes only its tempora
   assert.equal(await readFile(join(base, "existing-user.csv"), "utf8"), "user CSV stays");
 });
 
+test("exporter receives switches first and a trailing-separator target path last", async t => {
+  const base = await setup(t);
+  const seen = [];
+  for (const targetPath of ["C:\\Data", "C:\\"]) {
+    await scanWindows("mock-wiztree.exe", { ...input, targetPath }, {
+      temporaryParent: base, parseCsv: parseCsvStream,
+      run: async args => {
+        seen.push(args.slice(1));
+        await writeFile(exportedPath(args), csv);
+        return { stdout: "", stderr: "" };
+      },
+    });
+  }
+  for (const [index, argv] of seen.entries()) {
+    // Every switch must precede the target path; WizTree exits 0 without writing a
+    // CSV when the path comes first while a GUI instance is already running.
+    const firstSwitch = argv.findIndex(arg => arg.startsWith("/"));
+    assert.equal(firstSwitch, 0, "expected the first argument to be a switch");
+    assert.equal(argv.filter(arg => !arg.startsWith("/")).length, 1, "expected exactly one non-switch argument");
+    assert.equal(argv.at(-1), index === 0 ? "C:\\Data\\" : "C:\\", "target path must come last with a trailing separator");
+  }
+});
+
+test("Simplified Chinese WizTree CSV headers parse instead of yielding zero entries", async t => {
+  const base = await setup(t);
+  // zh-CN WizTree 4.x exports localised headers and doubles separators inside folder rows.
+  const zh = '生成由 WizTree 4.33 2026/10/27 0:17:01\n' +
+    "文件名称,大小,分配,修改时间,属性,文件,文件夹,DRIVECAPACITY,FREESPACE,USEDSPACE,RESERVEDSPACE\n" +
+    '"C:\\",3,4096,2026/10/27 00:16:57,0,1,1,1,1,1,0\n' +
+    '"C:\\\\Data\\",3,4096,2026/10/27 00:16:57,22,1,0\n' +
+    '"C:\\\\Data\\x.txt",3,4096,2026/10/27 00:16:57,0,0,0\n';
+  const result = await scanWindows("mock-wiztree.exe", input, {
+    temporaryParent: base, parseCsv: parseCsvStream,
+    run: async args => { await writeFile(exportedPath(args), zh); return { stdout: "", stderr: "" }; },
+  });
+  assert.equal(result.entries.length, 3, "localised headers must resolve columns");
+  const file = result.entries.find(entry => entry.path.endsWith("x.txt"));
+  assert.equal(file.path, "C:\\Data\\x.txt", "doubled separators must be collapsed");
+  assert.equal(file.size, 3);
+  const folder = result.entries.find(entry => entry.path === "C:\\Data\\");
+  assert.equal(folder.isFolder, true);
+  assert.equal(result.entries.reduce((sum, entry) => sum + (entry.isFolder ? 0 : entry.size), 0), 3);
+});
+
 for (const failure of ["exporter", "parser"]) {
   test(`Windows ${failure} failure cleans owned temporary files and leaves existing CSV intact`, async t => {
     const base = await setup(t);

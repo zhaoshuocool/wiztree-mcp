@@ -87,19 +87,20 @@ function resolveColumns(header: string[]): ColumnMap {
   const idx = (...names: string[]) =>
     header.findIndex((cell) => names.includes(cell.replace(/^\uFEFF/, "").trim()));
   return {
-    path: idx("File Name", "ファイル名"),
-    size: idx("Size", "サイズ"),
-    allocated: idx("Allocated", "割り当て"),
-    modified: idx("Modified", "更新日時"),
+    path: idx("File Name", "ファイル名", "文件名称", "文件名"),
+    size: idx("Size", "サイズ", "大小"),
+    allocated: idx("Allocated", "割り当て", "分配"),
+    modified: idx("Modified", "更新日時", "修改时间"),
     attributes: idx("Attributes", "属性"),
-    files: idx("Files", "ファイル数"),
-    folders: idx("Folders", "フォルダー"),
+    files: idx("Files", "ファイル数", "文件"),
+    folders: idx("Folders", "フォルダー", "文件夹"),
   };
 }
 
 function findHeaderOffset(text: string): number {
-  // Header may be quoted ("File Name",...) or bare (File Name,...), English or Japanese.
-  const match = /(?:^|\n)"?(?:file name|ファイル名)"?\s*,/i.exec(text);
+  // Header may be quoted ("File Name",...) or bare (File Name,...),
+  // in English, Japanese or Simplified Chinese (zh-CN WizTree builds).
+  const match = /(?:^|\n)"?(?:file name|ファイル名|文件名称)"?\s*,/i.exec(text);
   if (!match) return -1;
   return match.index === 0 ? 0 : match.index + 1;
 }
@@ -162,7 +163,9 @@ async function parseCsvStream(resolvedPath: string, signal?: AbortSignal, maxEnt
         continue;
       }
       const rawPath = cols.path >= 0 ? String(record[cols.path] ?? "") : "";
-      const path = rawPath.startsWith("/") ? rawPath : rawPath.trim();
+      // Some localised WizTree exports double the separators inside folder rows
+      // ("C:\\Windows\\"); collapse them so paths stay usable for drill_down.
+      const path = (rawPath.startsWith("/") ? rawPath : rawPath.trim()).replace(/\\{2,}/g, "\\");
       if (!path) continue;
 
       const entry: WizTreeEntry = {
