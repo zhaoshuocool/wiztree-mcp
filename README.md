@@ -102,6 +102,11 @@ List-style tools return compact tab-separated tables. `csvPath` inputs can be
 `scan:<id>` handles or filesystem paths. Save at least the earlier scan before
 running a second scan if you need a comparison.
 
+Some clients send scalars as strings. `"true"`, `"false"`, `"1"` and `"0"` are accepted
+where a boolean is expected and `"5000"` where a number is; the published schema still
+declares plain `boolean` / `integer`, so a well-behaved client sees one obvious type.
+Anything ambiguous (`"yes"`, `"two"`) is rejected, and the error names the parameter.
+
 ## Setup
 
 Requires Node.js 22 or newer. Install without lifecycle scripts, then build:
@@ -312,17 +317,19 @@ saves, in-memory handles, optional cleanup-tool disablement and fixture tests.
 Direct dependency declarations and package names are unchanged; patched
 transitive versions are recorded in the lockfile without adding native packages.
 
-`npm run typecheck`, `npm run build`, `npm test` (29 tests) and `git diff --check` pass.
+`npm run typecheck`, `npm run build`, `npm test` (31 tests) and `git diff --check` pass.
 Tests cover native sizes, symlinks, hardlinks, permission errors, cancellation and
 limits; English/Japanese Windows CSV compatibility; Mac real stdio analysis;
 cleanup-disabled `tools/list`; explicit saves, duplicate refusal and size budgets;
 and Windows mock/Node fixture subprocess export success, failure, parser failure,
 cancellation and timeout, including owned-temp cleanup and user-CSV preservation; and
-`scripts/print-config.mjs`, which emits registration blocks with real absolute paths.
+`scripts/print-config.mjs`, which emits registration blocks with real absolute paths;
+and tool input schemas through a real stdio session, asserting the published types stay
+plain while stringified scalars coerce and invented spellings fail.
 The suite is split by host and CI runs both jobs. `tests/windows.test.mjs` runs
 anywhere; the macOS-dependent cases in `tests/native.test.mjs` (POSIX symlinks, file
 modes, case-sensitive names) skip elsewhere, which is what makes `npm test` usable on
-Windows at all: 25 pass and 4 skip there, and all 29 run on macOS. Tests drive mock
+Windows at all: 27 pass and 4 skip there, and all 31 run on macOS. Tests drive mock
 exporters and Node subprocess fixtures rather than WizTree itself, so real WizTree,
 UAC and taskkill behavior is still not exercised. Tests use small temporary fixtures
 removed after execution (the 128 MiB budget fixture is sparse).
@@ -387,7 +394,7 @@ The declared range is now `^4.6.7`.
 Schema output was checked through a real stdio session rather than by type check alone:
 the 11 tools still publish their defaults, enum values, descriptions, numeric bounds and
 `exclusiveMinimum`, and a tool call still coerces defaults and returns its error text.
-`npm run typecheck`, `npm run build` and `npm test` (29 tests) pass, and the installed
+`npm run typecheck`, `npm run build` and `npm test` (31 tests) pass, and the installed
 tree was re-checked against the lockfile after `npm ci --ignore-scripts`.
 
 `body-parser` 2.4.0 now carries a nested `content-type` 2.1.0 next to the existing 1.x

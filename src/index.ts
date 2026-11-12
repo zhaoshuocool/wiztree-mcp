@@ -32,6 +32,24 @@ const exportDir = process.env.WIZTREE_MCP_EXPORT_DIR
   : join(projectRoot, "exports");
 const isWindows = process.platform === "win32";
 
+// Several MCP clients send scalars as strings ("true", "5000"), which strict boolean and
+// integer schemas reject. Accept only the unambiguous spellings and reject the rest.
+// z.preprocess is deliberate: unlike a union it keeps the published JSON Schema as a
+// plain boolean/integer, so clients still see one obvious type to fill in.
+const STRING_BOOL = new Map<string, boolean>([
+  ["true", true],
+  ["false", false],
+  ["1", true],
+  ["0", false],
+]);
+const coerceBool = (value: unknown): unknown =>
+  typeof value === "string" ? STRING_BOOL.get(value.trim().toLowerCase()) ?? value : value;
+const coerceNumber = (value: unknown): unknown => {
+  const text = typeof value === "string" ? value.trim() : "";
+  return /^\d+(?:\.\d+)?$/.test(text) ? Number(text) : value;
+};
+const boolFlag = (fallback: boolean) => z.preprocess(coerceBool, z.boolean().default(fallback));
+
 const server = new McpServer({
   name: "wiztree-mcp",
   version: "0.1.0",
@@ -558,23 +576,20 @@ server.registerTool(
     inputSchema: {
       targetPath: z.string().describe('Drive or folder to scan, such as "C:" or "D:\\Data".'),
       wiztreePath: z.string().optional().describe("Optional explicit path to WizTree64.exe or WizTree.exe."),
-      includeFiles: z.boolean().default(true).describe("Include file rows in the export."),
-      includeFolders: z.boolean().default(true).describe("Include folder rows in the export."),
-      admin: z
-        .boolean()
-        .default(false)
-        .describe(
-          "Pass /admin=1 to WizTree for a faster low-level MFT scan. This triggers a Windows UAC elevation dialog; in an unattended environment the process will hang until the configured timeout.",
-        ),
+      includeFiles: boolFlag(true).describe("Include file rows in the export."),
+      includeFolders: boolFlag(true).describe("Include folder rows in the export."),
+      admin: boolFlag(false).describe(
+        "Pass /admin=1 to WizTree for a faster low-level MFT scan. This triggers a Windows UAC elevation dialog; in an unattended environment the process will hang until the configured timeout.",
+      ),
       filter: z.string().optional().describe('Optional WizTree include filter, such as "*.mp4".'),
       filterExclude: z.string().optional().describe('Optional WizTree exclude filter, such as "node_modules".'),
       sortBy: z.string().optional().describe('Optional WizTree sort option, such as "size".'),
-      treemap: z.boolean().default(false).describe("Windows: return a 1024x768 treemap inline; its temporary PNG is removed after reading."),
-      saveSnapshot: z.boolean().default(false).describe("Explicitly save CSV; requires snapshotDirectory and snapshotName. Default keeps only the latest scan in memory, without persistent exports."),
+      treemap: boolFlag(false).describe("Windows: return a 1024x768 treemap inline; its temporary PNG is removed after reading."),
+      saveSnapshot: boolFlag(false).describe("Explicitly save CSV; requires snapshotDirectory and snapshotName. Default keeps only the latest scan in memory, without persistent exports."),
       snapshotDirectory: z.string().optional().describe("Explicit absolute directory for an intentionally saved CSV."),
       snapshotName: z.string().optional().describe("Explicit simple filename ending in .csv. Existing files are never overwritten."),
-      maxEntries: z.number().int().positive().max(MAX_ENTRIES_CAP).default(DEFAULT_MAX_ENTRIES).describe("Native traversal / Windows CSV entry limit."),
-      timeoutSeconds: z.number().int().positive().max(3600).default(300),
+      maxEntries: z.preprocess(coerceNumber, z.number().int().positive().max(MAX_ENTRIES_CAP).default(DEFAULT_MAX_ENTRIES)).describe("Native traversal / Windows CSV entry limit."),
+      timeoutSeconds: z.preprocess(coerceNumber, z.number().int().positive().max(3600).default(300)),
     },
   },
   async (input, extra) => {
@@ -625,7 +640,7 @@ server.registerTool(
     description: "Summarize an existing WizTree CSV snapshot.",
     inputSchema: {
       csvPath: z.string().describe("Path to a WizTree CSV export."),
-      topLimit: z.number().int().positive().max(100).default(20),
+      topLimit: z.preprocess(coerceNumber, z.number().int().positive().max(100).default(20)),
     },
   },
   async (input) => {
@@ -648,7 +663,7 @@ server.registerTool(
       csvPath: z.string(),
       kind: z.enum(["files", "folders", "all"]).default("all"),
       by: z.enum(["size", "allocated"]).default("size"),
-      limit: z.number().int().positive().max(500).default(50),
+      limit: z.preprocess(coerceNumber, z.number().int().positive().max(500).default(50)),
     },
   },
   async (input) => {
@@ -693,7 +708,7 @@ server.registerTool(
     inputSchema: {
       csvPath: z.string(),
       folderPath: z.string().describe('Folder path inside the snapshot, such as "C:\\Users\\me\\AppData".'),
-      limit: z.number().int().positive().max(500).default(50),
+      limit: z.preprocess(coerceNumber, z.number().int().positive().max(500).default(50)),
     },
   },
   async (input) => {
@@ -718,7 +733,7 @@ server.registerTool(
       csvPath: z.string(),
       query: z.string().describe('Substring or glob to match against paths, such as "node_modules" or "*.mp4".'),
       kind: z.enum(["files", "folders", "all"]).default("all"),
-      limit: z.number().int().positive().max(500).default(50),
+      limit: z.preprocess(coerceNumber, z.number().int().positive().max(500).default(50)),
     },
   },
   async (input) => {
@@ -736,9 +751,9 @@ server.registerTool(
     description: "Find large files not modified for a long time, sorted by size.",
     inputSchema: {
       csvPath: z.string(),
-      olderThanDays: z.number().positive().default(365).describe("Only files older than this many days."),
-      minSizeBytes: z.number().nonnegative().default(100 * 1024 * 1024).describe("Minimum file size in bytes (default 100 MB)."),
-      limit: z.number().int().positive().max(500).default(50),
+      olderThanDays: z.preprocess(coerceNumber, z.number().positive().default(365)).describe("Only files older than this many days."),
+      minSizeBytes: z.preprocess(coerceNumber, z.number().nonnegative().default(100 * 1024 * 1024)).describe("Minimum file size in bytes (default 100 MB)."),
+      limit: z.preprocess(coerceNumber, z.number().int().positive().max(500).default(50)),
     },
   },
   async (input) => {
@@ -759,7 +774,7 @@ server.registerTool(
     description: "Aggregate file usage by extension from a WizTree CSV snapshot.",
     inputSchema: {
       csvPath: z.string(),
-      limit: z.number().int().positive().max(500).default(100),
+      limit: z.preprocess(coerceNumber, z.number().int().positive().max(500).default(100)),
     },
   },
   async (input) => {
@@ -793,7 +808,7 @@ server.registerTool(
       beforeCsvPath: z.string(),
       afterCsvPath: z.string(),
       kind: z.enum(["files", "folders", "all"]).default("all"),
-      limit: z.number().int().positive().max(500).default(50),
+      limit: z.preprocess(coerceNumber, z.number().int().positive().max(500).default(50)),
     },
   },
   async (input) => {
@@ -864,7 +879,7 @@ if (process.env.WIZTREE_MCP_DISABLE_CLEANUP !== "1") {
       title: "Cleanup Snapshots",
       description: "Legacy explicit cleanup: delete older CSV/PNG files from the configured export directory. Disable with WIZTREE_MCP_DISABLE_CLEANUP=1.",
       inputSchema: {
-        keepLatest: z.number().int().nonnegative().max(1000).default(5).describe("Number of most recent snapshots (by base name) to keep."),
+        keepLatest: z.preprocess(coerceNumber, z.number().int().nonnegative().max(1000).default(5)).describe("Number of most recent snapshots (by base name) to keep."),
       },
     },
     async (input) => {
