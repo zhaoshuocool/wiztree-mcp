@@ -47,6 +47,7 @@ Windowsでは元のCSVを保持し、Macでは互換英語ヘッダーで保存�
 ## 起動と削除ツール
 
 Node.js 22以上で、`npm ci --ignore-scripts`、`npm run build`、`node dist/index.js`。
+ビルド後は`npm run print-config`が、絶対パスとtimeoutを埋め込んだ登録設定を出力します。
 Mac登録案は次の環境変数で既存のスナップショット削除ツールを非公開にします。
 
 ```toml
@@ -60,6 +61,8 @@ CSV/PNGを削除する機能で、既存ファイルの所有者は判定しま�
 通常スキャンの一時ファイル破棄は、この変数に関係なく行います。
 `WIZTREE_MCP_EXPORT_DIR`は旧list/cleanupの対象だけを設定し、明示保存先にはなりません。
 登録例・全ツール一覧は[README.md](./README.md)を参照してください。
+その文書では`<...>`表記がすべてプレースホルダ（実パスではない）だと明記しています。
+手入力の代わりに`npm run print-config -- --client codex`を使えば置換は不要です。
 
 **許可ルート設定は未実装です。** プロセスが読める任意のフォルダを指定でき、
 CSV読取はプロセスが読める任意のパスを許容します。`get_treemap`（PNGのみ）は
@@ -76,7 +79,7 @@ APFS共有領域・圧縮・スナップショット等を反映した「削除�
 MacではWizTree固有のadmin・フィルタ・sort・実行パス・treemap指定を拒否します。
 
 ## 検証記録
-型チェック・ビルド・16件のfixtureテストでMac実stdio分析、Windows mock/小型Node子プロセスの
+型チェック・ビルド・29件のfixtureテストでMac実stdio分析、Windows mock/小型Node子プロセスの
 成功・失敗・解析失敗・キャンセル・タイムアウトと一時CSV cleanup、既存CSV保持、
 明示保存・上限・重複拒否、削除無効時のtool一覧を確認しました。
 Windows/WizTree/UAC/taskkillの実機動作は未検証です。
@@ -86,7 +89,7 @@ Windows/WizTree/UAC/taskkillの実機動作は未検証です。
 ## 依存監査の修復
 
 既存semver範囲の間接依存7件を更新し、critical/highは0件になりました。
-`npm audit --audit-level=high`、型検査・build・16テストが通っています。
+`npm audit --audit-level=high`、型検査・build・29テストが通っています。
 直接依存の宣言、新規パッケージ名、CI監査基準は変更していません。
 具体的な深刻度・修正版・更新差分は[英語READMEの表](./README.md#dependency-audit-follow-up)を参照してください。
 

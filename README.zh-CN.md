@@ -90,7 +90,9 @@ WizTree64.exe /export=scan.csv /admin=0 /exportfiles=1 /exportfolders=1 "C:\User
 
 ### 附带的验证
 
-CI 现在跑 `npm test`，并且拆成 `windows-latest` 和 `macos-latest` 两个 job。之前 CI 里根本没有测试步骤：macOS 原生用例在 Windows runner 上必红（夹具要创建文件名含 `"` 的文件，Windows 不允许），于是整条测试链都没挂。现在这些依赖 POSIX 符号链接、文件权限、大小写敏感文件名的用例在非 macOS 上按原因跳过，`npm test` 在 Windows 上退出码 0 —— 26 项里 22 通过、4 跳过，macOS 上 26 项全部运行。
+CI 现在跑 `npm test`，并且拆成 `windows-latest` 和 `macos-latest` 两个 job。之前 CI 里根本没有测试步骤：macOS 原生用例在 Windows runner 上必红（夹具要创建文件名含 `"` 的文件，Windows 不允许），于是整条测试链都没挂。现在这些依赖 POSIX 符号链接、文件权限、大小写敏感文件名的用例在非 macOS 上按原因跳过，`npm test` 在 Windows 上退出码 0 —— 29 项里 25 通过、4 跳过，macOS 上 29 项全部运行。
+
+测试构成：`tests/native.test.mjs` 是 macOS 原生扫描用例，`tests/windows.test.mjs` 是 Windows 导出与 CSV 用例，`tests/print-config.test.mjs` 覆盖注册配置生成脚本（输出必须全是绝对路径、不得残留占位符文本；`dist/index.js` 缺失时以退出码 1 拒绝生成；参数写错要报错而不是静默输出空配置）。
 
 本轮新增回归测试（`tests/windows.test.mjs`）：
 
@@ -124,9 +126,11 @@ npm test
 node dist/index.js
 ```
 
+构建完成后，`npm run print-config` 会按当前这份 checkout 生成可直接粘贴的注册配置，不必手改文档里的路径，见下文「通用注册方法」。
+
 ### 注册到 DSH（DeepSeek-Harness）
 
-编辑 profile 的补丁文件 `%USERPROFILE%\.dsh\profiles\desktop\cordis.patch.yml`，追加：
+编辑 profile 的补丁文件 `%USERPROFILE%\.dsh\profiles\desktop\cordis.patch.yml`，追加（`<...>` 是占位符，含义见下文「示例里的占位符」）：
 
 ```yaml
 - id: mcp-wiztree
@@ -134,10 +138,10 @@ node dist/index.js
   config:
     serverName: wiztree
     transport: stdio
-    command: C:\Program Files\nodejs\node.exe
+    command: <NODE>\node.exe
     args:
-      - C:\Users\you\.dsh\mcp\wiztree-mcp\dist\index.js
-    cwd: C:\Users\you\.dsh\mcp\wiztree-mcp
+      - <仓库路径>\dist\index.js
+    cwd: <仓库路径>
     toolCallTimeoutMs: 600000
     env:
       WIZTREE_PATH: C:\Program Files\WizTree\WizTree64.exe
@@ -148,7 +152,46 @@ node dist/index.js
 
 ### 通用注册方法
 
-任何 MCP 客户端都要先满足三件事，缺一不可：
+先让仓库自己把路径算出来，别手改示例：
+
+```powershell
+npm run print-config                    # Codex、cc-switch、Claude Code/Desktop、Gemini CLI
+npm run print-config -- --client codex  # 只要某一个客户端
+```
+
+它按当前 checkout 打印下面这几类配置块，`dist/index.js` 的绝对路径、跑它的那个 `node` 的绝对路径、以及超时字段全部填好。`dist/index.js` 不存在时它直接以退出码 1 结束、不给可用输出，不会出现「只构建了一半就被注册进去」的情况。
+
+#### 示例里的占位符
+
+写成 `<...>` 的一律是**占位符，不是路径**，只有两个：
+
+| 占位符 | 替换成 | 怎么取 |
+|---|---|---|
+| `<仓库路径>` | 本仓库的绝对路径，例如 `C:\tools\wiztree-mcp` | `git rev-parse --show-toplevel` |
+| `<NODE>` | node 可执行文件所在目录（不含 `node.exe`） | `where.exe node` / `which node` |
+
+替换时把尖括号连同占位符整段换掉，只删中间那几个字不行。
+
+这一条比一般示例更要紧：`<` 和 `>` 本来就是非法路径字符，半替换的命令行永远解析不到文件，而客户端给出的信息几乎为零 —— 图形界面客户端是在模型介入之前就把 MCP 进程拉起来的，脚本路径 `ENOENT` 只会表现成「未连接」，甚至压根不出现在 `/mcp` 和工具列表里，对话里看不出到底是哪一行写错。
+
+#### 贴配置之前，先把两个路径确认下来
+
+```powershell
+npm run print-config -- --client codex   # 两个路径都已按目标文件的转义规则写好
+```
+
+或者在仓库根目录自己查：
+
+```powershell
+where.exe node                       # 填进 command
+node -e "console.log(require('path').join(process.cwd(),'dist','index.js'), require('fs').existsSync(require('path').join(process.cwd(),'dist','index.js')))"
+```
+
+macOS/Linux 用 `which node`，第二条命令一样。第二条必须打印 `true`；打印 `false` 说明没跑 `npm run build`，或者命令不是在仓库根目录执行的。
+
+贴完还要**重启客户端**（MCP 配置只在启动时读取），并且要验证连接、不要默认它已经好了：Codex 里 `/mcp` 必须能看到 `wiztree` 和它的工具；Claude Code 用 `claude mcp list`，它会真的连一次并回 `✔ wiztree - OK`。
+
+任何 MCP 客户端还要同时满足三件事，缺一不可：
 
 1. 先 `npm run build`。注册的是 `dist/index.js`，不是 `src/index.ts`。
 2. `command` 写 node 的**绝对路径**。Claude Desktop、ChatGPT 桌面版这类由图形界面拉起的客户端，PATH 里常常不含 node（用 nvm / fnm 时尤其如此），写裸 `node` 会直接 `ENOENT` 启动失败。
@@ -166,8 +209,8 @@ node dist/index.js
 
 ```toml
 [mcp_servers.wiztree]
-command = "C:\\Program Files\\nodejs\\node.exe"
-args = ["C:\\path\\to\\wiztree-mcp\\dist\\index.js"]
+command = "<NODE>\\node.exe"
+args = ["<仓库路径>\\dist\\index.js"]
 startup_timeout_sec = 120
 tool_timeout_sec = 600
 
@@ -179,10 +222,12 @@ WIZTREE_MCP_DISABLE_CLEANUP = "1"
 `startup_timeout_sec` 只管进程启动（默认 10 秒），和工具执行超时是两回事，两个都要设。也可以用 CLI 一步添加：
 
 ```powershell
-codex mcp add wiztree --env WIZTREE_PATH="C:\Program Files\WizTree\WizTree64.exe" --env WIZTREE_MCP_DISABLE_CLEANUP=1 -- "C:\Program Files\nodejs\node.exe" "C:\path\to\wiztree-mcp\dist\index.js"
+codex mcp add wiztree --env WIZTREE_PATH="C:\Program Files\WizTree\WizTree64.exe" --env WIZTREE_MCP_DISABLE_CLEANUP=1 -- "<NODE>\node.exe" "<仓库路径>\dist\index.js"
 ```
 
-`codex mcp add` 写不出超时字段，加完仍要手动补 `tool_timeout_sec`。
+`codex mcp add` 写不出超时字段，加完仍要手动补 `tool_timeout_sec`，所以更建议直接用 `npm run print-config -- --client codex` 打出来的整段 TOML。
+
+`WIZTREE_PATH` 在 WizTree 装于默认位置时可省。如果 `npm run print-config` 没探测到 WizTree、因而没输出这个键，就别自己补一个猜的路径：指向不存在的 `WizTree64.exe` 比不写这个键更糟。
 
 #### Claude Code / Claude Desktop
 
@@ -193,8 +238,8 @@ Claude Code 写 `~/.claude.json` 的 `mcpServers`，Claude Desktop 写 `claude_d
   "mcpServers": {
     "wiztree": {
       "type": "stdio",
-      "command": "C:\\Program Files\\nodejs\\node.exe",
-      "args": ["C:\\path\\to\\wiztree-mcp\\dist\\index.js"],
+      "command": "<NODE>\\node.exe",
+      "args": ["<仓库路径>\\dist\\index.js"],
       "env": {
         "WIZTREE_PATH": "C:\\Program Files\\WizTree\\WizTree64.exe",
         "WIZTREE_MCP_DISABLE_CLEANUP": "1"
@@ -204,14 +249,16 @@ Claude Code 写 `~/.claude.json` 的 `mcpServers`，Claude Desktop 写 `claude_d
 }
 ```
 
+JSON 里的反斜杠必须成对，少转义一位不会报错，只会解析成一个错路径，这类错误比 TOML 更难查；`npm run print-config -- --client claude` 会把转义一起处理掉。
+
 #### Gemini CLI（`~/.gemini/settings.json`）
 
 ```json
 {
   "mcpServers": {
     "wiztree": {
-      "command": "C:\\Program Files\\nodejs\\node.exe",
-      "args": ["C:\\path\\to\\wiztree-mcp\\dist\\index.js"],
+      "command": "<NODE>\\node.exe",
+      "args": ["<仓库路径>\\dist\\index.js"],
       "env": { "WIZTREE_PATH": "C:\\Program Files\\WizTree\\WizTree64.exe" },
       "timeout": 600000
     }
@@ -223,12 +270,15 @@ Claude Code 写 `~/.claude.json` 的 `mcpServers`，Claude Desktop 写 `claude_d
 
 [cc-switch](https://github.com/farion1231/cc-switch) 把 MCP 存在自己的库里，再由面板写进各客户端的配置文件。同时用 Codex 和 Claude Code 时，用它能少维护几份配置。
 
-1. 左侧栏 **MCP** → 页头 **添加 MCP**。
-2. 「粘贴配置」里贴上面任意一份 `mcpServers` JSON（直接贴 Codex 的 TOML 也认），表单会自动填好；也可以在「连接配置」里手填命令、参数（一行一个）、环境变量、工作目录。
-3. 「写入到」里勾选要同步的应用，点添加。之后在矩阵表里按应用单独开关。
-4. 重启对应客户端，工具会以 `mcp__wiztree__scan_path` 这类名字出现。
+1. `npm run print-config -- --client cc-switch`，复制它打印的 JSON。
+2. 左侧栏 **MCP** → 页头 **添加 MCP**。
+3. 把那段 JSON 贴进「粘贴配置」，表单会自动填好（直接贴 Codex 的 TOML 也认）；也可以在「连接配置」里手填命令、参数（一行一个）、环境变量、工作目录。
+4. 「写入到」里勾选要同步的应用，点添加。之后在矩阵表里按应用单独开关。
+5. 重启对应客户端并确认连接：Codex 看 `/mcp`，Claude Code 跑 `claude mcp list`。工具会以 `mcp__wiztree__scan_path` 这类名字出现。
 
-两个坑：如果 Codex 已经由 cc-switch 管理，**不要再手改 `~/.codex/config.toml` 的 `[mcp_servers]` 段**，cc-switch 每次同步都按自己的库重写，手加的条目会被冲掉。`tool_timeout_sec` 这类客户端原生字段 cc-switch 不解释、原样写出，放在 JSON 里是安全的。`工作目录` 可以留空：快照与清理目录由脚本自身位置推导（`<仓库>/exports`），与工作目录无关。
+在这里，第 1 步比其他客户端更不能省：cc-switch 把参数存进自己的库，再逐个回放给被它管理的客户端，所以面板「参数」里留下的占位路径会在下一次同步时被原样写进 `~/.codex/config.toml`，而启动失败在客户端里几乎不留错误文本。注册后看不到工具，先去 cc-switch 里编辑该条目、把参数那一行读一遍，再怀疑服务端。
+
+两个坑：如果 Codex 已经由 cc-switch 管理，**不要再手改 `~/.codex/config.toml` 的 `[mcp_servers]` 段**，cc-switch 每次同步都按自己的库重写，手改的修正会被冲掉，正确的改法是去面板里改条目。`tool_timeout_sec` 这类客户端原生字段 cc-switch 不解释、原样写出，放在 JSON 里是安全的。`工作目录` 可以留空：快照与清理目录由脚本自身位置推导（`<仓库路径>/exports`），与工作目录无关。
 
 ### 使用提示
 

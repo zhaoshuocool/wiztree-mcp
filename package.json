@@ -14,7 +14,8 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "print-config": "node scripts/print-config.mjs"
   },
   "keywords": [
     "mcp",

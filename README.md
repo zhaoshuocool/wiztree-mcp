@@ -116,16 +116,67 @@ npm test
 Run `node dist/index.js` for stdio MCP. The process waits for JSON-RPC messages.
 No native dependencies or macOS WizTree installation are required.
 
-## Proposed MCP configuration
+## Registering the server
 
-These are examples only; local configuration has not been changed.
+Let the checkout compute its own paths instead of editing an example by hand:
 
-macOS (adjust paths to your installation):
+```sh
+npm run print-config                    # Codex, cc-switch, Claude Code/Desktop, Gemini CLI
+npm run print-config -- --client codex  # one client only
+```
+
+It prints the same blocks shown below with this checkout's absolute `dist/index.js`,
+the absolute path of the `node` binary that ran it, and the timeout fields already
+present. If `dist/index.js` is missing it exits `1` and prints nothing usable, so a
+half-built checkout cannot quietly become a broken registration.
+
+### Placeholders in the examples below
+
+Any token written as `<...>` is a placeholder, never a path. There are two:
+
+| Token | Replace with | How to read it |
+|---|---|---|
+| `<REPO>` | absolute path of this checkout, e.g. `C:\tools\wiztree-mcp` | `git rev-parse --show-toplevel` |
+| `<NODE>` | absolute path of the directory holding `node`, e.g. `C:\Program Files\nodejs` | `where.exe node` / `which node` |
+
+Delete the angle brackets together with the token; do not keep the surrounding `<` `>`.
+
+This deserves more care than a typical example block. `<` and `>` are not valid path
+characters, so a line that was pasted half-replaced can never resolve, and the client
+reports almost nothing: GUI-launched clients start MCP servers before any model turn
+happens, so `ENOENT` on the script path surfaces only as "server not connected", or the
+server is simply absent from `/mcp` and the tool list. Nothing in the conversation says
+which line was wrong.
+
+### Resolve both paths before pasting
+
+```sh
+npm run print-config -- --client codex   # prints both, already escaped for the target file
+```
+
+Or read them by hand, from the repository root:
+
+```powershell
+where.exe node                       # goes in command
+node -e "console.log(require('path').join(process.cwd(),'dist','index.js'), require('fs').existsSync(require('path').join(process.cwd(),'dist','index.js')))"
+```
+
+`which node` on macOS/Linux. The second command must print `true`; `false` means
+`npm run build` never ran or the command was run outside the checkout.
+
+Then restart the client, because MCP servers are read at startup only, and verify the
+connection instead of assuming it. In Codex, `/mcp` has to list `wiztree` together with
+its tools. In Claude Code, `claude mcp list` actually connects and prints
+`✔ wiztree - OK`.
+
+### Codex (`~/.codex/config.toml`)
+
+macOS:
 
 ```toml
 [mcp_servers.wiztree]
-command = "/opt/homebrew/bin/node"
-args = ["/path/to/wiztree-mcp/dist/index.js"]
+command = "<NODE>/node"
+args = ["<REPO>/dist/index.js"]
 startup_timeout_sec = 120
 tool_timeout_sec = 600
 
@@ -133,12 +184,12 @@ tool_timeout_sec = 600
 WIZTREE_MCP_DISABLE_CLEANUP = "1"
 ```
 
-Windows:
+Windows (`<NODE>` is the directory from `where.exe node`):
 
 ```toml
 [mcp_servers.wiztree]
-command = 'C:\\Program Files\\nodejs\\node.exe'
-args = ['C:\path\to\wiztree-mcp\dist\index.js']
+command = '<NODE>\\node.exe'
+args = ['<REPO>\dist\index.js']
 startup_timeout_sec = 120
 tool_timeout_sec = 600
 
@@ -147,12 +198,14 @@ WIZTREE_PATH = 'C:\Program Files\WizTree\WizTree64.exe'
 WIZTREE_MCP_DISABLE_CLEANUP = '1'
 ```
 
-Use the absolute path to `node.exe`, not bare `node`. GUI-launched clients such as
+Use an absolute path to `node.exe`, not bare `node`. GUI-launched clients such as
 Claude Desktop and the ChatGPT desktop app start servers without a shell PATH, and
 version managers (nvm, fnm, volta) keep `node` off PATH entirely; a bare `node`
 then fails with `ENOENT` before the server can report anything.
 
 `WIZTREE_PATH` is optional when WizTree is found in a common location or `PATH`.
+Skip it if `npm run print-config` did not find WizTree there and print-config omitted
+the key; a path to a nonexistent `WizTree64.exe` is worse than no key at all.
 `admin: true` still triggers Windows UAC. The exporter process is terminated on
 cancellation/timeout and awaited before temporary-file cleanup. Windows process
 termination, UAC and file-lock behavior require real Windows validation.
@@ -171,6 +224,8 @@ tool call mid-scan and the result looks like "no entries" rather than a timeout:
 | Gemini CLI | `timeout` (ms) in `mcpServers.wiztree` | 60000 |
 
 `codex mcp add` cannot write timeout fields, so add `tool_timeout_sec` afterwards.
+`npm run print-config -- --client codex` writes them, which is the reason to prefer it
+over `codex mcp add`.
 
 ### Claude Code and Claude Desktop
 
@@ -182,8 +237,8 @@ shape from `claude_desktop_config.json`:
   "mcpServers": {
     "wiztree": {
       "type": "stdio",
-      "command": "C:\\Program Files\\nodejs\\node.exe",
-      "args": ["C:\\path\\to\\wiztree-mcp\\dist\\index.js"],
+      "command": "<NODE>\\node.exe",
+      "args": ["<REPO>\\dist\\index.js"],
       "env": {
         "WIZTREE_PATH": "C:\\Program Files\\WizTree\\WizTree64.exe",
         "WIZTREE_MCP_DISABLE_CLEANUP": "1"
@@ -193,26 +248,39 @@ shape from `claude_desktop_config.json`:
 }
 ```
 
+`npm run print-config -- --client claude` prints this block with the placeholders
+substituted, which also removes an escaping trap: in JSON, `C:\Users\ben\...` is not a
+literal path at all. Some sequences are parse errors, and ones like `\t` in `C:\tools`
+decode into a real tab character, so the entry looks valid and points nowhere.
+
 ### cc-switch (one entry, several clients)
 
 [cc-switch](https://github.com/farion1231/cc-switch) keeps MCP servers in its own
 store and writes them into each client's config file, which is handy when the same
 server should reach Codex and Claude Code at once.
 
-1. Sidebar **MCP** → header **Add MCP**.
-2. Paste any `mcpServers` JSON above into the "paste config" box (Codex TOML is
-   recognized too) and the form fills itself, or fill command, args (one per line),
-   env and working directory by hand.
-3. Tick the target apps under "write to", then add. Toggle per app later from the
-   matrix.
-4. Restart the client; tools appear as `mcp__wiztree__scan_path` and friends.
+1. `npm run print-config -- --client cc-switch`, then copy the JSON it prints.
+2. Sidebar **MCP** → header **Add MCP**.
+3. Paste that JSON into the "paste config" box and the form fills itself; the box also
+   accepts Codex TOML. Alternatively fill command, args (one per line), env and working
+   directory by hand in the connection form.
+4. Tick the target apps under "write to", then add. Toggle per app later from the matrix.
+5. Restart the client and confirm the connection: `/mcp` in Codex, `claude mcp list`
+   for Claude Code. Tools appear as `mcp__wiztree__scan_path` and friends.
 
-Two cautions. Once cc-switch manages Codex, stop editing the `[mcp_servers]`
-section of `~/.codex/config.toml` by hand: cc-switch rewrites that section from its
-own store on every sync, so manual entries get dropped. And `tool_timeout_sec` and
-other client-native fields pass through cc-switch verbatim, so keeping them in the
-pasted JSON is safe. The working directory can stay empty; the snapshot and cleanup
-directory is derived from the script location (`<repo>/exports`), not from cwd.
+Step 1 is worth taking seriously here more than anywhere else: cc-switch stores the args
+and replays them into every managed client, so a placeholder left in the panel's args
+field is written back into `~/.codex/config.toml` on the next sync, and the failed
+launch leaves no error text behind in the client. When a registered server shows no
+tools, edit the entry in cc-switch and read its args line before suspecting the server.
+
+Two cautions. Once cc-switch manages Codex, stop editing the `[mcp_servers]` section of
+`~/.codex/config.toml` by hand: cc-switch rewrites that section from its own store on
+every sync, so a manual fix gets dropped and the entry must be corrected in the panel.
+And `tool_timeout_sec` and other client-native fields pass through cc-switch verbatim,
+so keeping them in the pasted JSON is safe. The working directory can stay empty; the
+snapshot and cleanup directory is derived from the script location (`<REPO>/exports`),
+not from cwd.
 
 **No allowed-root setting is implemented.** The server can scan any directory
 readable by its process. Mac rejects `/` and symlink targets, but that is not an
@@ -244,16 +312,17 @@ saves, in-memory handles, optional cleanup-tool disablement and fixture tests.
 Direct dependency declarations and package names are unchanged; patched
 transitive versions are recorded in the lockfile without adding native packages.
 
-`npm run typecheck`, `npm run build`, `npm test` (26 tests) and `git diff --check` pass.
+`npm run typecheck`, `npm run build`, `npm test` (29 tests) and `git diff --check` pass.
 Tests cover native sizes, symlinks, hardlinks, permission errors, cancellation and
 limits; English/Japanese Windows CSV compatibility; Mac real stdio analysis;
 cleanup-disabled `tools/list`; explicit saves, duplicate refusal and size budgets;
 and Windows mock/Node fixture subprocess export success, failure, parser failure,
-cancellation and timeout, including owned-temp cleanup and user-CSV preservation.
+cancellation and timeout, including owned-temp cleanup and user-CSV preservation; and
+`scripts/print-config.mjs`, which emits registration blocks with real absolute paths.
 The suite is split by host and CI runs both jobs. `tests/windows.test.mjs` runs
 anywhere; the macOS-dependent cases in `tests/native.test.mjs` (POSIX symlinks, file
 modes, case-sensitive names) skip elsewhere, which is what makes `npm test` usable on
-Windows at all: 22 pass and 4 skip there, and all 26 run on macOS. Tests drive mock
+Windows at all: 25 pass and 4 skip there, and all 29 run on macOS. Tests drive mock
 exporters and Node subprocess fixtures rather than WizTree itself, so real WizTree,
 UAC and taskkill behavior is still not exercised. Tests use small temporary fixtures
 removed after execution (the 128 MiB budget fixture is sparse).
