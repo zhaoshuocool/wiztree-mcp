@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Read-only MCP server for WizTree CSV exports and disk usage analysis.",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "bin": {
     "wiztree-mcp": "./dist/index.js"
   },

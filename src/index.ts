@@ -4,7 +4,7 @@ import { scanWindows } from "./windows-scan.js";
 import { validateSnapshotDestination } from "./snapshots.js";
 import { createReadStream, existsSync } from "node:fs";
 import { readFile, readdir, stat, unlink } from "node:fs/promises";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { Transform } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -35,6 +35,16 @@ const isWindows = process.platform === "win32";
 const server = new McpServer({
   name: "wiztree-mcp",
   version: "0.1.0",
+}, {
+  // Codex and other clients feed this to the model before the first tool call, so
+  // the constraints worth stating up front belong here rather than in an error.
+  instructions:
+    "Read-only disk-usage analysis. scan_path exports a WizTree CSV and returns an in-memory handle " +
+    "such as \"scan:<uuid>\"; pass it as csvPath to analyze_csv, top_entries, drill_down, search_entries, " +
+    "old_large_files, extension_summary and compare_csv. Scan one directory, never a whole drive: scans " +
+    "above maxEntries (100000 rows by default, 200000 maximum) abort and discard everything parsed. " +
+    "Only the newest scan handle survives in this process, so saveSnapshot before comparing two scans. " +
+    "admin:true raises a Windows UAC prompt and blocks unattended runs.",
 });
 
 function textResult(text: string) {
@@ -83,11 +93,22 @@ type ColumnMap = {
   folders: number;
 };
 
+// Every spelling WizTree has shipped for the path column. findHeaderOffset() and
+// resolveColumns() read the same list on purpose: when the header finder misses a
+// spelling, the preamble becomes row one, every column resolves to -1, and the scan
+// "succeeds" with zero rows.
+const PATH_HEADER_NAMES = ["File Name", "ファイル名", "文件名称", "文件名"] as const;
+
+// scan_path defaults lower than the analysis tools on purpose: a scan is bounded by
+// memory this process holds, while an existing CSV may legitimately be read in full.
+const DEFAULT_MAX_ENTRIES = 100_000;
+const MAX_ENTRIES_CAP = 200_000;
+
 function resolveColumns(header: string[]): ColumnMap {
   const idx = (...names: string[]) =>
     header.findIndex((cell) => names.includes(cell.replace(/^\uFEFF/, "").trim()));
   return {
-    path: idx("File Name", "ファイル名", "文件名称", "文件名"),
+    path: idx(...PATH_HEADER_NAMES),
     size: idx("Size", "サイズ", "大小"),
     allocated: idx("Allocated", "割り当て", "分配"),
     modified: idx("Modified", "更新日時", "修改时间"),
@@ -98,9 +119,10 @@ function resolveColumns(header: string[]): ColumnMap {
 }
 
 function findHeaderOffset(text: string): number {
-  // Header may be quoted ("File Name",...) or bare (File Name,...),
-  // in English, Japanese or Simplified Chinese (zh-CN WizTree builds).
-  const match = /(?:^|\n)"?(?:file name|ファイル名|文件名称)"?\s*,/i.exec(text);
+  // Header may be quoted ("File Name",...) or bare (File Name,...), in any
+  // PATH_HEADER_NAMES spelling. Derive the alternation so the two lists cannot drift.
+  const names = PATH_HEADER_NAMES.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const match = new RegExp(`(?:^|\\n)"?(?:${names})"?\\s*,`, "i").exec(text);
   if (!match) return -1;
   return match.index === 0 ? 0 : match.index + 1;
 }
@@ -142,7 +164,16 @@ function makePreambleSkipper(): Transform {
   });
 }
 
-async function parseCsvStream(resolvedPath: string, signal?: AbortSignal, maxEntries = 200_000): Promise<WizTreeEntry[]> {
+// Some localised WizTree exports double every separator inside folder rows
+// ("C:\\Windows\\"). Collapse those so paths stay usable for drill_down, but keep a
+// leading UNC prefix intact: "\\server\share" collapsed whole becomes "\server\share",
+// which no longer matches anything in drill_down.
+export function collapseSeparators(path: string): string {
+  const unc = path.startsWith("\\\\") ? "\\\\" : "";
+  return unc + path.slice(unc.length).replace(/\\{2,}/g, "\\");
+}
+
+async function parseCsvStream(resolvedPath: string, signal?: AbortSignal, maxEntries = MAX_ENTRIES_CAP): Promise<WizTreeEntry[]> {
   signal?.throwIfAborted();
   const parser = parse({ relax_column_count: true, skip_empty_lines: true });
   const stream = createReadStream(resolvedPath);
@@ -160,12 +191,18 @@ async function parseCsvStream(resolvedPath: string, signal?: AbortSignal, maxEnt
       signal?.throwIfAborted();
       if (!cols) {
         cols = resolveColumns(record);
+        // Fail loudly here. A missed header otherwise degrades into every row being
+        // skipped as pathless, which reports as a successful scan with zero entries.
+        if (cols.path < 0) {
+          throw new Error(
+            `Unrecognized WizTree CSV header ${JSON.stringify(record.slice(0, 8))}. ` +
+              `Expected a path column named one of: ${PATH_HEADER_NAMES.join(", ")}.`,
+          );
+        }
         continue;
       }
       const rawPath = cols.path >= 0 ? String(record[cols.path] ?? "") : "";
-      // Some localised WizTree exports double the separators inside folder rows
-      // ("C:\\Windows\\"); collapse them so paths stay usable for drill_down.
-      const path = (rawPath.startsWith("/") ? rawPath : rawPath.trim()).replace(/\\{2,}/g, "\\");
+      const path = rawPath.startsWith("/") ? rawPath : collapseSeparators(rawPath.trim());
       if (!path) continue;
 
       const entry: WizTreeEntry = {
@@ -182,10 +219,17 @@ async function parseCsvStream(resolvedPath: string, signal?: AbortSignal, maxEnt
       if (attributes) entry.attributes = attributes;
       if (files !== undefined) entry.files = files;
       if (folders !== undefined) entry.folders = folders;
-      if (entries.length >= maxEntries) throw new Error("CSV entry limit reached; choose a smaller scan.");
+      if (entries.length >= maxEntries) {
+        throw new Error(`CSV entry limit (${maxEntries}) reached; raise maxEntries or choose a smaller scan.`);
+      }
       entries.push(entry);
     }
     signal?.throwIfAborted();
+    if (entries.length === 0) {
+      // A header that resolved but produced no rows means the export was empty or in
+      // a shape this parser does not understand; both are worth an explicit error.
+      throw new Error(`CSV ${resolvedPath} matched the header but yielded no rows; WizTree may have exported nothing.`);
+    }
     return entries;
   } finally {
     signal?.removeEventListener("abort", onAbort);
@@ -199,8 +243,21 @@ async function parseCsvStream(resolvedPath: string, signal?: AbortSignal, maxEnt
 
 type CacheEntry = { key: string; mtimeMs: number; size: number; entries: WizTreeEntry[] };
 const CACHE_LIMIT = 3;
+// Row budget across cached CSVs plus the in-memory scan handle. Entries are plain
+// objects, so a byte-accurate figure is not worth the walk; this bounds residency.
+const RESIDENT_ROW_BUDGET = 400_000;
 const csvCache: CacheEntry[] = [];
 let scanSnapshot: { id: string; entries: WizTreeEntry[] } | undefined;
+
+function cachedRows(): number {
+  return csvCache.reduce((sum, entry) => sum + entry.entries.length, scanSnapshot?.entries.length ?? 0);
+}
+
+function trimCache() {
+  while (csvCache.length > 1 && (csvCache.length > CACHE_LIMIT || cachedRows() > RESIDENT_ROW_BUDGET)) {
+    csvCache.pop();
+  }
+}
 
 async function readCsv(csvPath: string): Promise<WizTreeEntry[]> {
   if (csvPath.startsWith("scan:")) {
@@ -222,10 +279,23 @@ async function readCsv(csvPath: string): Promise<WizTreeEntry[]> {
     csvCache.unshift(hit);
     return hit.entries;
   }
-  const entries = await parseCsvStream(resolved);
+  // Analysis tools read whole user-owned CSVs, so they accept the cap rather than
+  // the lower scan default. The limit is reported in the error when it is hit.
+  const entries = await parseCsvStream(resolved, undefined, MAX_ENTRIES_CAP);
   csvCache.unshift({ key: resolved, mtimeMs: stats.mtimeMs, size: stats.size, entries });
-  while (csvCache.length > CACHE_LIMIT) csvCache.pop();
+  trimCache();
   return entries;
+}
+
+// Containment test for path arguments. String prefixes are not enough: case differs
+// on Windows and a trailing separator changes the comparison.
+function isWithin(parent: string, child: string): boolean {
+  const normalize = (path: string) => {
+    const lowered = isWindows ? path.toLowerCase() : path;
+    return lowered.length > 1 ? lowered.replace(/[\\/]$/, "") : lowered;
+  };
+  const delta = relative(normalize(parent), normalize(child));
+  return delta === "" || (!isAbsolute(delta) && delta !== ".." && !delta.startsWith(`..${sep}`));
 }
 
 // --- Analysis helpers ------------------------------------------------------
@@ -427,12 +497,6 @@ function findWizTreeCandidates(): string[] {
   const envPath = process.env.WIZTREE_PATH;
   if (envPath) candidates.add(envPath);
 
-  const pathDirs = (process.env.PATH ?? "").split(";").filter(Boolean);
-  for (const dir of pathDirs) {
-    candidates.add(join(dir, "WizTree64.exe"));
-    candidates.add(join(dir, "WizTree.exe"));
-  }
-
   for (const root of [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]].filter(Boolean) as string[]) {
     candidates.add(join(root, "WizTree", "WizTree64.exe"));
     candidates.add(join(root, "WizTree", "WizTree.exe"));
@@ -444,6 +508,13 @@ function findWizTreeCandidates(): string[] {
   candidates.add(join(projectRoot, "WizTree.exe"));
   candidates.add(join(dirname(projectRoot), "WizTree", "WizTree64.exe"));
   candidates.add(join(dirname(projectRoot), "WizTree", "WizTree.exe"));
+
+  // PATH last, deliberately. Anything writable on PATH would otherwise be executed
+  // ahead of the real installation, and this is a launch-the-winner path.
+  for (const dir of (process.env.PATH ?? "").split(";").filter(Boolean)) {
+    candidates.add(join(dir, "WizTree64.exe"));
+    candidates.add(join(dir, "WizTree.exe"));
+  }
 
   return [...candidates];
 }
@@ -502,7 +573,7 @@ server.registerTool(
       saveSnapshot: z.boolean().default(false).describe("Explicitly save CSV; requires snapshotDirectory and snapshotName. Default keeps only the latest scan in memory, without persistent exports."),
       snapshotDirectory: z.string().optional().describe("Explicit absolute directory for an intentionally saved CSV."),
       snapshotName: z.string().optional().describe("Explicit simple filename ending in .csv. Existing files are never overwritten."),
-      maxEntries: z.number().int().positive().max(200_000).default(100_000).describe("Native traversal / Windows CSV entry limit."),
+      maxEntries: z.number().int().positive().max(MAX_ENTRIES_CAP).default(DEFAULT_MAX_ENTRIES).describe("Native traversal / Windows CSV entry limit."),
       timeoutSeconds: z.number().int().positive().max(3600).default(300),
     },
   },
@@ -529,7 +600,8 @@ server.registerTool(
     }
     const wiztree = locateWizTree(input.wiztreePath);
     if (!wiztree) {
-      return textResult("WizTree executable was not found. Set WIZTREE_PATH or pass wiztreePath.");
+      // isError like the sibling failure branches; a plain text result reads as success.
+      return { ...textResult("WizTree executable was not found. Set WIZTREE_PATH or pass wiztreePath."), isError: true };
     }
 
     const result = await scanWindows(wiztree, input, { parseCsv: parseCsvStream }, extra.signal);
@@ -706,8 +778,8 @@ server.registerTool(
       .sort((a, b) => b.size - a.size)
       .slice(0, input.limit);
     return tableResult(
-      ["sizeHuman", "files", "extension"],
-      rows.map((row) => [formatBytes(row.size), String(row.files), row.extension]),
+      ["sizeHuman", "allocatedHuman", "files", "extension"],
+      rows.map((row) => [formatBytes(row.size), formatBytes(row.allocated), String(row.files), row.extension]),
     );
   },
 );
@@ -761,15 +833,24 @@ server.registerTool(
   "get_treemap",
   {
     title: "Get Treemap",
-    description: "Return a previously generated treemap PNG as an image.",
+    description: "Return a treemap PNG saved in the export directory as an image. scan_path returns treemaps inline and deletes its temporary PNG.",
     inputSchema: {
-      pngPath: z.string().describe("Path to a treemap PNG generated by scan_path."),
+      pngPath: z.string().describe("Path to a PNG inside the export directory (see list_snapshots)."),
     },
   },
   async (input) => {
     const resolved = resolve(input.pngPath);
+    if (extname(resolved).toLowerCase() !== ".png") {
+      return { ...textResult(`get_treemap only serves PNG files: ${resolved}`), isError: true };
+    }
+    if (!isWithin(exportDir, resolved)) {
+      return {
+        ...textResult(`get_treemap is limited to the export directory (${exportDir}). scan_path returns treemap images inline and removes its temporary PNG.`),
+        isError: true,
+      };
+    }
     if (!existsSync(resolved)) {
-      return textResult(`Treemap PNG not found: ${resolved}`);
+      return { ...textResult(`Treemap PNG not found: ${resolved}`), isError: true };
     }
     return { content: [await imageContent(resolved)] };
   },
@@ -857,5 +938,9 @@ export {
   selectTop,
   parseModified,
   formatBytes,
+  isWithin,
+  findWizTreeCandidates,
+  MAX_ENTRIES_CAP,
+  DEFAULT_MAX_ENTRIES,
 };
 export type { WizTreeEntry };

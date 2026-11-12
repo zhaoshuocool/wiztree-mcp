@@ -30,7 +30,15 @@ export async function saveSnapshotBytes(csv: string | Buffer, directory: string,
       const stats = await lstat(join(directory, filename));
       if (stats.isFile()) existingBytes += stats.size;
     }
-    if (existingBytes + bytes > 128 * 1024 * 1024) throw new Error("Snapshot directory exceeds 128 MiB budget; review saved snapshots before saving more.");
+    if (existingBytes + bytes > 128 * 1024 * 1024) {
+      // Name the directory and the accounting: the cleanup tool is commonly disabled
+      // by WIZTREE_MCP_DISABLE_CLEANUP, so the caller has to reach for the filesystem.
+      throw new Error(
+        `Snapshot directory ${directory} holds ${existingBytes} bytes and would reach ` +
+          `${existingBytes + bytes} bytes, over the 128 MiB budget. Delete saved CSVs there, ` +
+          `or pass a different snapshotDirectory.`,
+      );
+    }
     const csvPath = join(directory, name);
     signal?.throwIfAborted();
     // Exclusive creation never overwrites user CSVs. Cleanup is limited to a file

@@ -7,8 +7,12 @@
 > no error at all, and its exporter argument order silently writes no CSV when a
 > WizTree GUI instance is already running. This branch adds zh-CN headers, moves the
 > target path last with a trailing separator, and collapses doubled separators.
+> It also closes the silent-failure and path-safety gaps that survived that work: an
+> unrecognized header now fails loudly instead of reporting an empty scan, UNC
+> prefixes survive separator collapsing, `get_treemap` is confined to the export
+> directory, and WizTree lookup prefers install locations over `PATH`.
 > See [README.zh-CN.md](./README.zh-CN.md) for the full write-up, install steps and
-> regression tests. Everything below is unchanged upstream documentation.
+> regression tests.
 
 Disk-usage analysis over MCP. Windows uses WizTree CSV export; macOS uses a
 read-only native metadata scanner. Existing English/Japanese WizTree CSVs remain
@@ -72,7 +76,7 @@ maximum 200,000).
 
 ## Tools
 
-- `locate_wiztree`: Find WizTree from `WIZTREE_PATH`, `PATH`, and common locations.
+- `locate_wiztree`: Find WizTree from `WIZTREE_PATH`, common install locations, then `PATH`.
 - `scan_path`: Scan a specified target; return a memory handle or an explicitly named CSV. Windows supports its existing include/exclude filters, sorting, admin and treemap arguments.
 - `analyze_csv`: Summarize a handle or an existing CSV.
 - `top_entries`: Largest files/folders by logical or allocated size.
@@ -82,7 +86,9 @@ maximum 200,000).
 - `extension_summary`: File usage by extension.
 - `compare_csv`: Growth/shrinkage between handles or CSV files.
 - `list_snapshots`: List the configured legacy export directory. Intentionally saved snapshots elsewhere are accessed by their returned paths.
-- `get_treemap`: Read a previously existing PNG from an explicit path.
+- `get_treemap`: Read a PNG from the configured export directory only. `scan_path`
+  returns treemaps inline and deletes its temporary PNG, so this serves PNGs that are
+  actually saved in that directory.
 - `cleanup_snapshots`: Legacy explicit deletion of older CSV/PNG files in the configured export directory. This tool does not establish ownership of legacy files; it is disabled in the configuration examples below.
 
 Setting `WIZTREE_MCP_DISABLE_CLEANUP=1` omits `cleanup_snapshots` from
@@ -121,6 +127,7 @@ macOS (adjust paths to your installation):
 command = "/opt/homebrew/bin/node"
 args = ["/path/to/wiztree-mcp/dist/index.js"]
 startup_timeout_sec = 120
+tool_timeout_sec = 600
 
 [mcp_servers.wiztree.env]
 WIZTREE_MCP_DISABLE_CLEANUP = "1"
@@ -130,19 +137,82 @@ Windows:
 
 ```toml
 [mcp_servers.wiztree]
-command = 'node'
+command = 'C:\\Program Files\\nodejs\\node.exe'
 args = ['C:\path\to\wiztree-mcp\dist\index.js']
 startup_timeout_sec = 120
+tool_timeout_sec = 600
 
 [mcp_servers.wiztree.env]
 WIZTREE_PATH = 'C:\Program Files\WizTree\WizTree64.exe'
 WIZTREE_MCP_DISABLE_CLEANUP = '1'
 ```
 
+Use the absolute path to `node.exe`, not bare `node`. GUI-launched clients such as
+Claude Desktop and the ChatGPT desktop app start servers without a shell PATH, and
+version managers (nvm, fnm, volta) keep `node` off PATH entirely; a bare `node`
+then fails with `ENOENT` before the server can report anything.
+
 `WIZTREE_PATH` is optional when WizTree is found in a common location or `PATH`.
 `admin: true` still triggers Windows UAC. The exporter process is terminated on
 cancellation/timeout and awaited before temporary-file cleanup. Windows process
 termination, UAC and file-lock behavior require real Windows validation.
+
+### Timeouts
+
+Scans are long-running, and every client's default tool timeout is far below this
+server's own `timeoutSeconds` (300 s by default). Left unset, the client aborts the
+tool call mid-scan and the result looks like "no entries" rather than a timeout:
+
+| Client | Tool-call timeout setting | Default |
+|---|---|---|
+| Codex | `tool_timeout_sec` (seconds) in `[mcp_servers.wiztree]` | 60 |
+| Codex (startup) | `startup_timeout_sec` (seconds) | 10 |
+| Claude Code / Claude Desktop | `MCP_TOOL_TIMEOUT` (ms); `MCP_TIMEOUT` bounds startup | 30000 ms startup |
+| Gemini CLI | `timeout` (ms) in `mcpServers.wiztree` | 60000 |
+
+`codex mcp add` cannot write timeout fields, so add `tool_timeout_sec` afterwards.
+
+### Claude Code and Claude Desktop
+
+Claude Code reads `mcpServers` from `~/.claude.json`; Claude Desktop reads the same
+shape from `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "wiztree": {
+      "type": "stdio",
+      "command": "C:\\Program Files\\nodejs\\node.exe",
+      "args": ["C:\\path\\to\\wiztree-mcp\\dist\\index.js"],
+      "env": {
+        "WIZTREE_PATH": "C:\\Program Files\\WizTree\\WizTree64.exe",
+        "WIZTREE_MCP_DISABLE_CLEANUP": "1"
+      }
+    }
+  }
+}
+```
+
+### cc-switch (one entry, several clients)
+
+[cc-switch](https://github.com/farion1231/cc-switch) keeps MCP servers in its own
+store and writes them into each client's config file, which is handy when the same
+server should reach Codex and Claude Code at once.
+
+1. Sidebar **MCP** → header **Add MCP**.
+2. Paste any `mcpServers` JSON above into the "paste config" box (Codex TOML is
+   recognized too) and the form fills itself, or fill command, args (one per line),
+   env and working directory by hand.
+3. Tick the target apps under "write to", then add. Toggle per app later from the
+   matrix.
+4. Restart the client; tools appear as `mcp__wiztree__scan_path` and friends.
+
+Two cautions. Once cc-switch manages Codex, stop editing the `[mcp_servers]`
+section of `~/.codex/config.toml` by hand: cc-switch rewrites that section from its
+own store on every sync, so manual entries get dropped. And `tool_timeout_sec` and
+other client-native fields pass through cc-switch verbatim, so keeping them in the
+pasted JSON is safe. The working directory can stay empty; the snapshot and cleanup
+directory is derived from the script location (`<repo>/exports`), not from cwd.
 
 **No allowed-root setting is implemented.** The server can scan any directory
 readable by its process. Mac rejects `/` and symlink targets, but that is not an
@@ -174,14 +244,18 @@ saves, in-memory handles, optional cleanup-tool disablement and fixture tests.
 Direct dependency declarations and package names are unchanged; patched
 transitive versions are recorded in the lockfile without adding native packages.
 
-`npm run typecheck`, `npm run build`, `npm test` (16 tests) and `git diff --check` pass.
+`npm run typecheck`, `npm run build`, `npm test` (26 tests) and `git diff --check` pass.
 Tests cover native sizes, symlinks, hardlinks, permission errors, cancellation and
 limits; English/Japanese Windows CSV compatibility; Mac real stdio analysis;
 cleanup-disabled `tools/list`; explicit saves, duplicate refusal and size budgets;
 and Windows mock/Node fixture subprocess export success, failure, parser failure,
 cancellation and timeout, including owned-temp cleanup and user-CSV preservation.
-The Windows lifecycle tests run on Mac. No real Windows/WizTree/UAC/taskkill run
-was performed. Tests use small temporary fixtures
+The suite is split by host and CI runs both jobs. `tests/windows.test.mjs` runs
+anywhere; the macOS-dependent cases in `tests/native.test.mjs` (POSIX symlinks, file
+modes, case-sensitive names) skip elsewhere, which is what makes `npm test` usable on
+Windows at all: 22 pass and 4 skip there, and all 26 run on macOS. Tests drive mock
+exporters and Node subprocess fixtures rather than WizTree itself, so real WizTree,
+UAC and taskkill behavior is still not exercised. Tests use small temporary fixtures
 removed after execution (the 128 MiB budget fixture is sparse).
 
 Validation used only fixtures; no real disk scan, user-data deletion, MCP
