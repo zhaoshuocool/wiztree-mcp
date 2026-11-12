@@ -107,6 +107,14 @@ CI 现在跑 `npm test`，并且拆成 `windows-latest` 和 `macos-latest` 两�
 
 原先的三个回归测试保留不动：开关顺序、中文表头解析、以及 Windows 生命周期用例。
 
+自动化测试全部跑在夹具上。夹具之外做过一次 Windows 实机冒烟：按客户端的方式启动构建产物，注册后的 stdio 会话列出全部 11 个工具、用已安装的 `WizTree64.exe` 扫了一个小目录、跑了若干分析工具，并正确拒绝了越界的 `get_treemap` 路径。UAC 提权、导出进程卡死时的 `taskkill`、macOS 实机行为以及任何用户数据删除仍未验证，本分支也不会持久扩大权限。
+
+### 依赖审计第二轮
+
+`npm audit --audit-level=high` 因两条新公告重新变红：`body-parser`（high）与 `zod`（high，影响 `zod <4.6.6`，GHSA-mrhx-c7xc-m3w5，校验超大受限集合时内存耗尽）。zod 3.x 没有修复版，而 `@modelcontextprotocol/sdk` 1.32 声明 `zod: ^3.25 || ^4.0`、`zod-to-json-schema` 3.25.2 的 peer 是 `^3.25.28 || ^4`，因此这一项破例把直接依赖升到 `^4.6.7`（第一轮「不动大版本」的规则仅此一处例外），解析后的依赖树里 zod 只有一份，没有藏在 SDK 下的 v3 副本。除类型检查外，还按真实 stdio 会话核过 11 个工具的 default、enum、description 与数值上限均照常输出。
+
+其余为间接依赖刷新：`@hono/node-server` 1.19.17 → 2.1.7、`body-parser` 2.2.2 → 2.4.0（附带一个嵌套 `content-type` 2.1.0，包名未新增）、`fast-uri` 3.1.8 → 3.1.9，以及 `ip-address`、`qs`、`iconv-lite` 随同刷新。`csv-parse` 5.x 仍是未处理的 moderate（仅在 7.0.2 修复，属破坏性大版本），继续留作单独评审。`npm audit --audit-level=high` 恢复退出码 0，`--audit-level=moderate` 仍报那一条，未添加任何审计豁免。完整表格见英文 README 的「Second pass」。
+
 ## 安装方式
 
 需要 **Node.js 22+**，以及已安装的 WizTree（默认找 `C:\Program Files\WizTree\WizTree64.exe`，可用 `WIZTREE_PATH` 覆盖）。

@@ -82,18 +82,28 @@ MacではWizTree固有のadmin・フィルタ・sort・実行パス・treemap指
 型チェック・ビルド・29件のfixtureテストでMac実stdio分析、Windows mock/小型Node子プロセスの
 成功・失敗・解析失敗・キャンセル・タイムアウトと一時CSV cleanup、既存CSV保持、
 明示保存・上限・重複拒否、削除無効時のtool一覧を確認しました。
-Windows/WizTree/UAC/taskkillの実機動作は未検証です。
-検証では実disk走査・実データ削除・MCP登録・永続権限拡大は実施していません。
+Windows実機で一度だけ手動スモークを実施し、登録済みstdioセッションが11ツールを列挙し、
+導入済みの`WizTree64.exe`で小さい実ディレクトリを走査し、`get_treemap`の範囲外指定を
+拒否する点を確認しました。UAC昇格、ハング時taskkill、macOS実機、ユーザーデータの削除は未検証です。
 ネイティブ依存は追加していません。
 
 ## 依存監査の修復
 
 既存semver範囲の間接依存7件を更新し、critical/highは0件になりました。
 `npm audit --audit-level=high`、型検査・build・29テストが通っています。
-直接依存の宣言、新規パッケージ名、CI監査基準は変更していません。
+新規パッケージ名とCI監査基準は変更していません（直接依存の宣言変更は下記の2巡目だけ）。
 具体的な深刻度・修正版・更新差分は[英語READMEの表](./README.md#dependency-audit-follow-up)を参照してください。
 
 残りは`csv-parse`のmoderateと`body-parser`のlowです。
+
+## 依存監査の2巡目
+
+新しい公告2件でhighゲートが再び落ちたため追補しました：`body-parser`（high）と
+`zod`（high、`zod <4.6.6`、GHSA-mrhx-c7xc-m3w5）です。`zod`の3.xに修正版がないため、
+直接依存を`^4.6.7`へ上げました。`@modelcontextprotocol/sdk` 1.32は`zod: ^3.25 || ^4.0`、
+`zod-to-json-schema` 3.25.2は`^3.25.28 || ^4`を許可し、解決ツリーのzodは1つだけです。
+型検査だけでなく実stdioで、11ツールのdefault・enum・description・数値上限がそのまま
+出力されることを確認済みです。詳細な表は英語READMEの「Second pass」にあります。
 前者はメジャー更新、後者は新しい入れ子の`content-type` 2.x依存が必要なため別途レビューに保留しました。
 監査を無効化したり、`npm audit fix --force`を使用したりしていません。
 

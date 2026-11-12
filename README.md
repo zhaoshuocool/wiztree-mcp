@@ -327,10 +327,17 @@ exporters and Node subprocess fixtures rather than WizTree itself, so real WizTr
 UAC and taskkill behavior is still not exercised. Tests use small temporary fixtures
 removed after execution (the 128 MiB budget fixture is sparse).
 
-Validation used only fixtures; no real disk scan, user-data deletion, MCP
-registration or persistent permission expansion was performed.
+The automated suite stays inside fixtures. Outside it, one manual smoke run on Windows
+started the built server the way a client does: a registered stdio session listed all 11
+tools, scanned a small real directory with the installed `WizTree64.exe`, ran the
+analysis tools over that scan, and refused an out-of-range `get_treemap` path. UAC
+elevation, `taskkill` against a hung exporter, real macOS host behavior and any
+user-data deletion remain unverified, and nothing in this branch widens permissions
+persistently.
 
 ## Dependency audit follow-up
+
+### First pass
 
 `npm audit --audit-level=high` passes after compatible transitive updates; the
 existing CI threshold is unchanged. No forced or major update was used, and
@@ -353,6 +360,41 @@ esbuild's existing platform packages follow 0.28.2. No package names were added.
 Two findings remain: `csv-parse` requires a major update and `body-parser` 2.3.0
 introduces a nested `content-type` 2.x dependency. Both are deferred for separate
 review. This is not a zero-findings audit report. No audit exception was added.
+
+### Second pass
+
+The high gate started failing again once two newer advisories were published:
+`body-parser` (high: a silently disabled size limit, and DoS via trailing bytes after a
+compressed body) and `zod` (high: GHSA-mrhx-c7xc-m3w5, memory exhaustion while
+validating oversized constrained collections, affecting `zod <4.6.6`).
+
+| Package | Kind | Locked version before → after | Fixed from |
+| --- | --- | --- | --- |
+| body-parser | transitive | 2.2.2 → 2.4.0 | 2.4.0 |
+| @hono/node-server | transitive | 1.19.17 → 2.1.7 | 2.1.3 |
+| fast-uri | transitive | 3.1.8 → 3.1.9 | 3.1.9 |
+| ip-address | transitive | 10.7.3 → 10.7.6 | same resolution |
+| qs | transitive | 6.16.0 → 6.17.1 | same resolution |
+| iconv-lite | transitive | 0.7.2 → 0.7.3 | same resolution |
+| zod | direct, major | 3.25.76 → 4.6.7 | 4.6.6 |
+
+The first pass's "no major update" rule was lifted for `zod` alone, because it has no
+3.x fix and both consumers already accept v4: `@modelcontextprotocol/sdk` 1.32 declares
+`zod: ^3.25 || ^4.0`, `zod-to-json-schema` 3.25.2 peers `^3.25.28 || ^4`, and the
+resolved tree keeps one deduplicated `zod` instead of a v3 copy hiding under the SDK.
+The declared range is now `^4.6.7`.
+
+Schema output was checked through a real stdio session rather than by type check alone:
+the 11 tools still publish their defaults, enum values, descriptions, numeric bounds and
+`exclusiveMinimum`, and a tool call still coerces defaults and returns its error text.
+`npm run typecheck`, `npm run build` and `npm test` (29 tests) pass, and the installed
+tree was re-checked against the lockfile after `npm ci --ignore-scripts`.
+
+`body-parser` 2.4.0 now carries a nested `content-type` 2.1.0 next to the existing 1.x
+copy; no package name was added. `csv-parse` 5.x stays open (moderate, fixed only in
+7.0.2, a breaking major) and is still deferred for separate review. `npm audit
+--audit-level=high` exits 0 again; `--audit-level=moderate` still reports that single
+finding. No audit exception was added.
 
 ## License
 
