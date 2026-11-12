@@ -3,9 +3,13 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { saveSnapshotBytes, validateSnapshotDestination } from "./snapshots.js";
+import { EmptyWizTreeExportError } from "./export-errors.js";
 import type { WizTreeEntry } from "./index.js";
 
 type ProcessResult = { stdout: string; stderr: string };
+
+// One retry of an export that produced no rows: cheap compared with a failed tool call.
+const MAX_EXPORT_ATTEMPTS = 2;
 export async function runExportProcess(args: string[], timeoutSeconds: number, signal?: AbortSignal): Promise<ProcessResult> {
   signal?.throwIfAborted();
   return new Promise((done, reject) => {
@@ -71,9 +75,23 @@ export async function scanWindows(wiztree: string, input: WindowsScanInput, deps
     if (input.sortBy) args.push(`/sortby=${input.sortBy}`);
     if (input.treemap) args.push(`/treemapimagefile=${pngPath}`, "/treemapimagewidth=1024", "/treemapimageheight=768", "/treemapimagefreespace=0", "/treemapimageshowallocated=1");
     args.push(target);
-    const output = await (deps.run ?? runExportProcess)(args, input.timeoutSeconds, signal);
-    signal?.throwIfAborted();
-    const entries = await deps.parseCsv(csvPath, signal, input.maxEntries);
+    async function exportOnce(attempt: number): Promise<{ output: ProcessResult; entries: WizTreeEntry[] }> {
+      const output = await (deps.run ?? runExportProcess)(args, input.timeoutSeconds, signal);
+      signal?.throwIfAborted();
+      try {
+        return { output, entries: await deps.parseCsv(csvPath, signal, input.maxEntries) };
+      } catch (error) {
+        if (error instanceof EmptyWizTreeExportError && attempt < MAX_EXPORT_ATTEMPTS) {
+          process.stderr.write(
+            `wiztree-mcp: ${wiztree} exported no rows; retrying once (attempt ${attempt + 1}/${MAX_EXPORT_ATTEMPTS})\n`,
+          );
+          signal?.throwIfAborted();
+          return exportOnce(attempt + 1);
+        }
+        throw error;
+      }
+    }
+    const { output, entries } = await exportOnce(1);
     signal?.throwIfAborted();
     const image = input.treemap ? { type: "image" as const, data: (await readFile(pngPath)).toString("base64"), mimeType: "image/png" } : undefined;
     let originalCsv: Buffer | undefined;

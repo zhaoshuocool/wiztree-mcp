@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { scanDirectory, saveNativeSnapshot } from "./native-scan.js";
 import { scanWindows } from "./windows-scan.js";
+import { EmptyWizTreeExportError } from "./export-errors.js";
 import { validateSnapshotDestination } from "./snapshots.js";
 import { createReadStream, existsSync } from "node:fs";
 import { readFile, readdir, stat, unlink } from "node:fs/promises";
@@ -246,7 +247,7 @@ async function parseCsvStream(resolvedPath: string, signal?: AbortSignal, maxEnt
     if (entries.length === 0) {
       // A header that resolved but produced no rows means the export was empty or in
       // a shape this parser does not understand; both are worth an explicit error.
-      throw new Error(`CSV ${resolvedPath} matched the header but yielded no rows; WizTree may have exported nothing.`);
+      throw new EmptyWizTreeExportError(resolvedPath);
     }
     return entries;
   } finally {

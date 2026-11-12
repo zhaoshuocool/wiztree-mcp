@@ -90,7 +90,7 @@ WizTree64.exe /export=scan.csv /admin=0 /exportfiles=1 /exportfolders=1 "C:\User
 
 ### 附带的验证
 
-CI 现在跑 `npm test`，并且拆成 `windows-latest` 和 `macos-latest` 两个 job。之前 CI 里根本没有测试步骤：macOS 原生用例在 Windows runner 上必红（夹具要创建文件名含 `"` 的文件，Windows 不允许），于是整条测试链都没挂。现在这些依赖 POSIX 符号链接、文件权限、大小写敏感文件名的用例在非 macOS 上按原因跳过，`npm test` 在 Windows 上退出码 0 —— 31 项里 27 通过、4 跳过，macOS 上 31 项全部运行。
+CI 现在跑 `npm test`，并且拆成 `windows-latest` 和 `macos-latest` 两个 job。之前 CI 里根本没有测试步骤：macOS 原生用例在 Windows runner 上必红（夹具要创建文件名含 `"` 的文件，Windows 不允许），于是整条测试链都没挂。现在这些依赖 POSIX 符号链接、文件权限、大小写敏感文件名的用例在非 macOS 上按原因跳过，`npm test` 在 Windows 上退出码 0 —— 34 项里 30 通过、4 跳过，macOS 上 34 项全部运行。
 
 测试构成：`tests/native.test.mjs` 是 macOS 原生扫描用例，`tests/windows.test.mjs` 是 Windows 导出与 CSV 用例，`tests/print-config.test.mjs` 覆盖注册配置生成脚本（输出必须全是绝对路径、不得残留占位符文本；`dist/index.js` 缺失时以退出码 1 拒绝生成；参数写错要报错而不是静默输出空配置），`tests/schema.test.mjs` 在真实 stdio 会话里核工具入参 schema（发布的类型必须是单一 `boolean` / `integer`，字符串化的标量要被接受，乱写的值要报错并点出参数名）。
 
@@ -297,6 +297,7 @@ JSON 里的反斜杠必须成对，少转义一位不会报错，只会解析成
 - UNC 路径（`\\server\share`）会被正确识别，折叠双反斜杠时保留引导双反斜杠，`drill_down` 可以正常下钻。
 - 参数名以 `tools/list` 公布的 schema 为准：`scan_path` 要的是 `targetPath`，不是 `path`；本服务端没有 `max_depth` 这类深度参数，靠 `maxEntries` 限量。名字写错会被入参校验挡下，返回的错误信息里会点出缺的是哪个参数。
 - 部分客户端会把标量写成字符串：`"true"`、`"false"`、`"1"`、`"0"` 按布尔接受，`"5000"` 按数字接受；`"yes"`、`"two"` 这类含糊写法仍然拒绝。容错只加在入参上，发布的 schema 始终是单一 `boolean` / `integer`，不会因此变成 `anyOf`。
+- WizTree 在 GUI 实例已占用索引时，可能只导出一个表头就以退出码 0 结束。这种情况服务端会**自动重试一次**（复用同样的开关与目标路径），第二次仍为空才报错；解析类的其它失败不重试，也不会出现第三次尝试。
 
 ### 安全边界
 

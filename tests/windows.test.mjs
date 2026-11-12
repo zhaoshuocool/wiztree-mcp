@@ -6,6 +6,7 @@ import { join, dirname } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { scanWindows, runExportProcess } from "../dist/windows-scan.js";
+import { EmptyWizTreeExportError } from "../dist/export-errors.js";
 import { parseCsvStream, drillDown, isWithin, collapseSeparators, findWizTreeCandidates } from "../dist/index.js";
 import { saveSnapshotBytes, validateSnapshotDestination } from "../dist/snapshots.js";
 
@@ -265,4 +266,51 @@ test("WizTree lookup prefers known install locations over PATH", t => {
   const fromPath = candidates.findIndex(path => path === join(planted, "WizTree64.exe"));
   assert.ok(installed >= 0 && fromPath >= 0, `expected both candidates, got ${candidates.slice(0, 6)}`);
   assert.ok(installed < fromPath, "a PATH hit must not outrank the real installation");
+});
+
+test("an empty WizTree export is retried once and then parsed", async t => {
+  const base = await setup(t);
+  const runs = [];
+  let parseCalls = 0;
+  const result = await scanWindows("mock-wiztree.exe", { ...input, includeFiles: true, includeFolders: true }, {
+    temporaryParent: base,
+    parseCsv: async () => {
+      parseCalls += 1;
+      if (parseCalls === 1) throw new EmptyWizTreeExportError("fixture");
+      return [{ path: "C:\\Data\\x.txt", size: 3, allocated: 4096, isFolder: false }];
+    },
+    run: async args => { runs.push(args); return { stdout: "", stderr: "" }; },
+  });
+  assert.equal(parseCalls, 2);
+  assert.equal(runs.length, 2, "the exporter must run again");
+  assert.deepEqual(runs[0], runs[1], "the retry must reuse the same switches and target");
+  assert.equal(result.entries.length, 1);
+});
+
+test("a persistently empty export fails after exactly one retry", async t => {
+  const base = await setup(t);
+  let parseCalls = 0;
+  await assert.rejects(
+    scanWindows("mock-wiztree.exe", input, {
+      temporaryParent: base,
+      parseCsv: async () => { parseCalls += 1; throw new EmptyWizTreeExportError("fixture"); },
+      run: async () => ({ stdout: "", stderr: "" }),
+    }),
+    /matched the header but yielded no rows/,
+  );
+  assert.equal(parseCalls, 2, "there must be no third attempt");
+});
+
+test("a parser failure that is not an empty export is never retried", async t => {
+  const base = await setup(t);
+  let runCalls = 0;
+  await assert.rejects(
+    scanWindows("mock-wiztree.exe", input, {
+      temporaryParent: base,
+      parseCsv: async () => { throw new Error("CSV entry limit (200000) reached"); },
+      run: async () => { runCalls += 1; return { stdout: "", stderr: "" }; },
+    }),
+    /entry limit/,
+  );
+  assert.equal(runCalls, 1);
 });
