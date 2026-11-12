@@ -449,6 +449,9 @@ function globToRegExp(query: string): RegExp {
   return new RegExp(escaped, "i");
 }
 
+// WizTree folder rows already contain their descendants, and kind "all" matches those
+// folders and the files inside them, so summing every matched row counted the same
+// bytes several times over. Keep file bytes and folder container bytes apart.
 function searchEntries(
   entries: WizTreeEntry[],
   query: string,
@@ -460,18 +463,53 @@ function searchEntries(
   const needle = query.toLowerCase();
   const matcher = (path: string) => (regex ? regex.test(path) : path.toLowerCase().includes(needle));
 
-  let totalSize = 0;
-  let totalCount = 0;
+  let filesCount = 0;
+  let filesSize = 0;
+  let foldersCount = 0;
+  let foldersSize = 0;
   const matches: WizTreeEntry[] = [];
   for (const entry of entries) {
     if (kind !== "all" && (kind === "files" ? entry.isFolder : !entry.isFolder)) continue;
     if (!matcher(entry.path)) continue;
-    totalSize += entry.size;
-    totalCount += 1;
+    if (entry.isFolder) {
+      foldersCount += 1;
+      foldersSize += entry.size;
+    } else {
+      filesCount += 1;
+      filesSize += entry.size;
+    }
     matches.push(entry);
   }
   matches.sort((a, b) => b.size - a.size);
-  return { rows: matches.slice(0, limit), totalSize, totalCount };
+  return {
+    rows: matches.slice(0, limit),
+    totalCount: matches.length,
+    filesCount,
+    filesSize,
+    foldersCount,
+    foldersSize,
+  };
+}
+
+// Only file bytes are reclaimable space. Folder rows are containers that overlap both
+// each other and the file rows, so they are reported as a separate, labelled figure.
+function describeSearch(result: ReturnType<typeof searchEntries>): string {
+  const counts = result.foldersCount
+    ? `${result.totalCount} rows (${result.filesCount} files, ${result.foldersCount} folders)`
+    : `${result.filesCount} files`;
+  const sizes: string[] = [];
+  if (result.filesCount) {
+    sizes.push(`files total: ${formatBytes(result.filesSize)} (${result.filesSize} bytes)`);
+  }
+  if (result.foldersCount) {
+    sizes.push(`folders total: ${formatBytes(result.foldersSize)} (${result.foldersSize} bytes)`);
+  }
+  const summary = `Matches: ${counts}${sizes.length ? `, ${sizes.join(", ")}` : ""}, showing top ${result.rows.length}`;
+  if (!result.foldersCount) return summary;
+  const overlap = result.filesCount
+    ? "Folder sizes are container totals that already include their descendants: they overlap the files total and each other, so only the files total is space you could reclaim."
+    : "Folder sizes are container totals that already include their descendants, so they overlap each other and are not additive.";
+  return `${summary}\n${overlap}`;
 }
 
 function parseModified(value: string): number | undefined {
@@ -680,26 +718,38 @@ server.registerTool(
   "list_snapshots",
   {
     title: "List Snapshots",
-    description: "List WizTree CSV snapshots in the export directory, newest first.",
-    inputSchema: {},
+    // Saved snapshots are not always in the configured export directory, and a listing
+    // that silently ignored the real destination read as "your snapshot is gone".
+    description: "List WizTree CSV snapshots, newest first. Defaults to the configured export directory; pass snapshotDirectory to list somewhere else, such as the directory used with scan_path saveSnapshot.",
+    inputSchema: {
+      snapshotDirectory: z.string().optional().describe("Absolute directory whose CSVs to list. A directory you passed to scan_path must be repeated here; it is not remembered."),
+    },
   },
-  async () => {
-    if (!existsSync(exportDir)) {
+  async (input) => {
+    const explicit = Boolean(input.snapshotDirectory);
+    const directory = explicit ? resolve(input.snapshotDirectory!) : exportDir;
+    if (!existsSync(directory)) {
+      // A typo in an explicit path must not look like an empty snapshot list.
+      if (explicit) return { ...textResult(`Snapshot directory not found: ${directory}`), isError: true };
       return tableResult(["mtime", "sizeHuman", "path"], [], `No export directory yet: ${exportDir}`);
     }
-    const names = await readdir(exportDir);
+    if (!(await stat(directory)).isDirectory()) {
+      return { ...textResult(`Snapshot directory is not a directory: ${directory}`), isError: true };
+    }
+    const names = await readdir(directory);
     const snapshots = [];
     for (const name of names) {
       if (!name.toLowerCase().endsWith(".csv")) continue;
-      const full = join(exportDir, name);
+      const full = join(directory, name);
       const stats = await stat(full);
+      if (!stats.isFile()) continue;
       snapshots.push({ path: full, size: stats.size, mtimeMs: stats.mtimeMs });
     }
     snapshots.sort((a, b) => b.mtimeMs - a.mtimeMs);
     return tableResult(
       ["mtime", "sizeHuman", "path"],
       snapshots.map((snap) => [new Date(snap.mtimeMs).toISOString(), formatBytes(snap.size), snap.path]),
-      `${snapshots.length} snapshot(s) in ${exportDir}`,
+      `${snapshots.length} snapshot(s) in ${directory}`,
     );
   },
 );
@@ -732,7 +782,7 @@ server.registerTool(
   "search_entries",
   {
     title: "Search Entries",
-    description: "Search a WizTree snapshot for paths matching a substring or glob (* and ?), sorted by size, with total matched size and count.",
+    description: "Search a WizTree snapshot for paths matching a substring or glob (* and ?), sorted by size. Reports file bytes and folder container bytes separately: only the file total is reclaimable space.",
     inputSchema: {
       csvPath: z.string(),
       query: z.string().describe('Substring or glob to match against paths, such as "node_modules" or "*.mp4".'),
@@ -742,9 +792,8 @@ server.registerTool(
   },
   async (input) => {
     const entries = await readCsv(input.csvPath);
-    const { rows, totalSize, totalCount } = searchEntries(entries, input.query, input.kind, input.limit);
-    const preamble = `Matches: ${totalCount}, total size: ${formatBytes(totalSize)} (${totalSize} bytes), showing top ${rows.length}`;
-    return entriesTable(rows, preamble);
+    const result = searchEntries(entries, input.query, input.kind, input.limit);
+    return entriesTable(result.rows, describeSearch(result));
   },
 );
 

@@ -86,11 +86,16 @@ maximum 200,000).
 - `analyze_csv`: Summarize a handle or an existing CSV.
 - `top_entries`: Largest files/folders by logical or allocated size.
 - `drill_down`: Direct children of a folder, sorted by size.
-- `search_entries`: Path substring or glob search with matched count and size.
+- `search_entries`: Path substring or glob search. File bytes and folder container bytes are
+  counted and reported apart, because a WizTree folder row already contains its descendants:
+  only the file total is space you could reclaim.
 - `old_large_files`: Files larger than a threshold and older than a chosen age.
 - `extension_summary`: File usage by extension.
 - `compare_csv`: Growth/shrinkage between handles or CSV files.
-- `list_snapshots`: List the configured legacy export directory. Intentionally saved snapshots elsewhere are accessed by their returned paths.
+- `list_snapshots`: List CSV snapshots newest first, in the configured legacy export directory
+  by default or in an explicit absolute `snapshotDirectory`. The export directory does not
+  remember where earlier scans saved their CSVs, so pass that directory here to list them;
+  any snapshot is usable as `csvPath` from its returned path either way.
 - `get_treemap`: Read a PNG from the configured export directory only. `scan_path`
   returns treemaps inline and deletes its temporary PNG, so this serves PNGs that are
   actually saved in that directory.
@@ -327,7 +332,7 @@ saves, in-memory handles, optional cleanup-tool disablement and fixture tests.
 Direct dependency declarations and package names are unchanged; patched
 transitive versions are recorded in the lockfile without adding native packages.
 
-`npm run typecheck`, `npm run build`, `npm test` (35 tests) and `git diff --check` pass.
+`npm run typecheck`, `npm run build`, `npm test` (37 tests) and `git diff --check` pass.
 Tests cover native sizes, symlinks, hardlinks, permission errors, cancellation and
 limits; English/Japanese Windows CSV compatibility; Mac real stdio analysis;
 cleanup-disabled `tools/list`; explicit saves, duplicate refusal and size budgets;
@@ -337,11 +342,14 @@ cancellation and timeout, including owned-temp cleanup and user-CSV preservation
 and tool input schemas through a real stdio session, asserting the published types stay
 plain while stringified scalars coerce and invented spellings fail; and the empty-export
 retry, which happens once, reuses the same switches, never becomes a third attempt and
-does not fire for other parse failures.
+does not fire for other parse failures; and through a real stdio session, that
+`search_entries` keeps folder container bytes out of the file total, and that
+`list_snapshots` stays in the export directory unless an explicit `snapshotDirectory` is
+given, where a typo then fails loudly instead of reporting an empty list.
 The suite is split by host and CI runs both jobs. `tests/windows.test.mjs` runs
 anywhere; the macOS-dependent cases in `tests/native.test.mjs` (POSIX symlinks, file
 modes, case-sensitive names) skip elsewhere, which is what makes `npm test` usable on
-Windows at all: 31 pass and 4 skip there, and all 35 run on macOS. Tests drive mock
+Windows at all: 33 pass and 4 skip there, and all 37 run on macOS. Tests drive mock
 exporters and Node subprocess fixtures rather than WizTree itself, so real WizTree,
 UAC and taskkill behavior is still not exercised. Tests use small temporary fixtures
 removed after execution (the 128 MiB budget fixture is sparse).
@@ -406,7 +414,7 @@ The declared range is now `^4.6.7`.
 Schema output was checked through a real stdio session rather than by type check alone:
 the 11 tools still publish their defaults, enum values, descriptions, numeric bounds and
 `exclusiveMinimum`, and a tool call still coerces defaults and returns its error text.
-`npm run typecheck`, `npm run build` and `npm test` (35 tests) pass, and the installed
+`npm run typecheck`, `npm run build` and `npm test` (37 tests) pass, and the installed
 tree was re-checked against the lockfile after `npm ci --ignore-scripts`.
 
 `body-parser` 2.4.0 now carries a nested `content-type` 2.1.0 next to the existing 1.x

@@ -15,12 +15,12 @@ WizTree 是 Windows 上最快的磁盘占用分析工具（直接读 NTFS 主文
 | `analyze_csv` | 汇总某个句柄或 CSV 文件 |
 | `top_entries` | 按逻辑大小/实际占用列出最大的文件或文件夹 |
 | `drill_down` | 展开某个目录的直接子项，按大小排序 |
-| `search_entries` | 按路径子串或通配符搜索 |
+| `search_entries` | 按路径子串或通配符搜索，文件字节与文件夹容器字节分开报 |
 | `old_large_files` | 找出「大于 X 且超过 N 天没改」的文件 |
 | `extension_summary` | 按扩展名统计占用 |
 | `compare_csv` | 对比两次扫描的增减 |
 | `get_treemap` | 读取已有的 treemap PNG |
-| `list_snapshots` | 列出快照目录 |
+| `list_snapshots` | 列出快照目录，可用 `snapshotDirectory` 指定别的目录 |
 
 扫描只读取元数据，不会修改任何被扫描的文件。
 
@@ -90,7 +90,7 @@ WizTree64.exe /export=scan.csv /admin=0 /exportfiles=1 /exportfolders=1 "C:\User
 
 ### 附带的验证
 
-CI 现在跑 `npm test`，并且拆成 `windows-latest` 和 `macos-latest` 两个 job。之前 CI 里根本没有测试步骤：macOS 原生用例在 Windows runner 上必红（夹具要创建文件名含 `"` 的文件，Windows 不允许），于是整条测试链都没挂。现在这些依赖 POSIX 符号链接、文件权限、大小写敏感文件名的用例在非 macOS 上按原因跳过，`npm test` 在 Windows 上退出码 0 —— 35 项里 31 通过、4 跳过，macOS 上 35 项全部运行。
+CI 现在跑 `npm test`，并且拆成 `windows-latest` 和 `macos-latest` 两个 job。之前 CI 里根本没有测试步骤：macOS 原生用例在 Windows runner 上必红（夹具要创建文件名含 `"` 的文件，Windows 不允许），于是整条测试链都没挂。现在这些依赖 POSIX 符号链接、文件权限、大小写敏感文件名的用例在非 macOS 上按原因跳过，`npm test` 在 Windows 上退出码 0 —— 37 项里 33 通过、4 跳过，macOS 上 37 项全部运行。
 
 测试构成：`tests/native.test.mjs` 是 macOS 原生扫描用例，`tests/windows.test.mjs` 是 Windows 导出与 CSV 用例，`tests/print-config.test.mjs` 覆盖注册配置生成脚本（输出必须全是绝对路径、不得残留占位符文本；`dist/index.js` 缺失时以退出码 1 拒绝生成；参数写错要报错而不是静默输出空配置），`tests/schema.test.mjs` 在真实 stdio 会话里核工具入参 schema（发布的类型必须是单一 `boolean` / `integer`，字符串化的标量要被接受，乱写的值要报错并点出参数名）。
 
@@ -108,6 +108,18 @@ CI 现在跑 `npm test`，并且拆成 `windows-latest` 和 `macos-latest` 两�
 原先的三个回归测试保留不动：开关顺序、中文表头解析、以及 Windows 生命周期用例。
 
 自动化测试全部跑在夹具上。夹具之外做过一次 Windows 实机冒烟：按客户端的方式启动构建产物，注册后的 stdio 会话列出全部 11 个工具、用已安装的 `WizTree64.exe` 扫了一个小目录、跑了若干分析工具，并正确拒绝了越界的 `get_treemap` 路径。UAC 提权、导出进程卡死时的 `taskkill`、macOS 实机行为以及任何用户数据删除仍未验证，本分支也不会持久扩大权限。
+
+实机使用后的第二轮回归（同样在 `tests/windows.test.mjs`，走真实 stdio 会话）：
+
+- `search_entries keeps folder container bytes out of the file total`
+- `list_snapshots defaults to the export directory and honours an explicit snapshotDirectory`
+
+前者锁住实机发现的重复计数：`node_modules` 实际 54.59 MB，旧实现把文件夹行和其中的文件行一起
+累加成 250.2 MB，看起来像能释放的空间翻了几倍。WizTree 的文件夹行本身已含子孙字节，所以
+`kind: "all"` 时文件字节与文件夹容器字节必须分开报，只有文件字节才是可回收空间。
+后者锁住保存目录的可见性：`saveSnapshot` 存到自定义目录的 CSV 以前在 `list_snapshots` 里完全
+看不见（但当作 `csvPath` 是好使的），现在传 `snapshotDirectory` 就能列出，目录写错要报错而不是
+假装列表为空。
 
 ### 依赖审计第二轮
 
