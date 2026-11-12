@@ -112,6 +112,11 @@ where a boolean is expected and `"5000"` where a number is; the published schema
 declares plain `boolean` / `integer`, so a well-behaved client sees one obvious type.
 Anything ambiguous (`"yes"`, `"two"`) is rejected, and the error names the parameter.
 
+Argument names come from `tools/list` and are camelCase: `targetPath`, `includeFiles`,
+`includeFolders`, `maxEntries`, `timeoutSeconds`. There is no `path`, no `max_depth`, no
+depth limit at all; the row budget is `maxEntries`. The server states this in its
+`instructions` as well, since clients feed that to the model before the first call.
+
 ## Setup
 
 Requires Node.js 22 or newer. Install without lifecycle scripts, then build:
@@ -322,7 +327,7 @@ saves, in-memory handles, optional cleanup-tool disablement and fixture tests.
 Direct dependency declarations and package names are unchanged; patched
 transitive versions are recorded in the lockfile without adding native packages.
 
-`npm run typecheck`, `npm run build`, `npm test` (34 tests) and `git diff --check` pass.
+`npm run typecheck`, `npm run build`, `npm test` (35 tests) and `git diff --check` pass.
 Tests cover native sizes, symlinks, hardlinks, permission errors, cancellation and
 limits; English/Japanese Windows CSV compatibility; Mac real stdio analysis;
 cleanup-disabled `tools/list`; explicit saves, duplicate refusal and size budgets;
@@ -336,7 +341,7 @@ does not fire for other parse failures.
 The suite is split by host and CI runs both jobs. `tests/windows.test.mjs` runs
 anywhere; the macOS-dependent cases in `tests/native.test.mjs` (POSIX symlinks, file
 modes, case-sensitive names) skip elsewhere, which is what makes `npm test` usable on
-Windows at all: 30 pass and 4 skip there, and all 34 run on macOS. Tests drive mock
+Windows at all: 31 pass and 4 skip there, and all 35 run on macOS. Tests drive mock
 exporters and Node subprocess fixtures rather than WizTree itself, so real WizTree,
 UAC and taskkill behavior is still not exercised. Tests use small temporary fixtures
 removed after execution (the 128 MiB budget fixture is sparse).
@@ -401,7 +406,7 @@ The declared range is now `^4.6.7`.
 Schema output was checked through a real stdio session rather than by type check alone:
 the 11 tools still publish their defaults, enum values, descriptions, numeric bounds and
 `exclusiveMinimum`, and a tool call still coerces defaults and returns its error text.
-`npm run typecheck`, `npm run build` and `npm test` (34 tests) pass, and the installed
+`npm run typecheck`, `npm run build` and `npm test` (35 tests) pass, and the installed
 tree was re-checked against the lockfile after `npm ci --ignore-scripts`.
 
 `body-parser` 2.4.0 now carries a nested `content-type` 2.1.0 next to the existing 1.x

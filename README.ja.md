@@ -79,7 +79,7 @@ APFS共有領域・圧縮・スナップショット等を反映した「削除�
 MacではWizTree固有のadmin・フィルタ・sort・実行パス・treemap指定を拒否します。
 
 ## 検証記録
-型チェック・ビルド・34件のfixtureテストでMac実stdio分析、Windows mock/小型Node子プロセスの
+型チェック・ビルド・35件のfixtureテストでMac実stdio分析、Windows mock/小型Node子プロセスの
 成功・失敗・解析失敗・キャンセル・タイムアウトと一時CSV cleanup、既存CSV保持、
 明示保存・上限・重複拒否、削除無効時のtool一覧を確認しました。
 Windows実機で一度だけ手動スモークを実施し、登録済みstdioセッションが11ツールを列挙し、
@@ -95,7 +95,7 @@ WizTreeがGUIインスタンスの索引占有でヘッダー行だけを書き�
 ## 依存監査の修復
 
 既存semver範囲の間接依存7件を更新し、critical/highは0件になりました。
-`npm audit --audit-level=high`、型検査・build・34テストが通っています。
+`npm audit --audit-level=high`、型検査・build・35テストが通っています。
 新規パッケージ名とCI監査基準は変更していません（直接依存の宣言変更は下記の2巡目だけ）。
 具体的な深刻度・修正版・更新差分は[英語READMEの表](./README.md#dependency-audit-follow-up)を参照してください。
 

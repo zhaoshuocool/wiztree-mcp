@@ -61,3 +61,12 @@ test("stringified scalars are coerced, invented spellings still fail", async t =
   assert.equal(notANumber.isError, true);
   assert.match(String(notANumber.content[0].text), /limit/);
 });
+
+test("server instructions name the real arguments and disclaim invented ones", async t => {
+  const client = await connect(t);
+  const instructions = client.getInstructions?.() ?? "";
+  for (const name of ["targetPath", "includeFiles", "maxEntries", "timeoutSeconds"]) {
+    assert.match(instructions, new RegExp(name), `instructions must mention ${name}`);
+  }
+  assert.match(instructions, /no path, max_depth, timeout or snake_case variant/);
+});

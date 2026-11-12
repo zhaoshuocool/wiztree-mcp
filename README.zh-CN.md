@@ -90,7 +90,7 @@ WizTree64.exe /export=scan.csv /admin=0 /exportfiles=1 /exportfolders=1 "C:\User
 
 ### 附带的验证
 
-CI 现在跑 `npm test`，并且拆成 `windows-latest` 和 `macos-latest` 两个 job。之前 CI 里根本没有测试步骤：macOS 原生用例在 Windows runner 上必红（夹具要创建文件名含 `"` 的文件，Windows 不允许），于是整条测试链都没挂。现在这些依赖 POSIX 符号链接、文件权限、大小写敏感文件名的用例在非 macOS 上按原因跳过，`npm test` 在 Windows 上退出码 0 —— 34 项里 30 通过、4 跳过，macOS 上 34 项全部运行。
+CI 现在跑 `npm test`，并且拆成 `windows-latest` 和 `macos-latest` 两个 job。之前 CI 里根本没有测试步骤：macOS 原生用例在 Windows runner 上必红（夹具要创建文件名含 `"` 的文件，Windows 不允许），于是整条测试链都没挂。现在这些依赖 POSIX 符号链接、文件权限、大小写敏感文件名的用例在非 macOS 上按原因跳过，`npm test` 在 Windows 上退出码 0 —— 35 项里 31 通过、4 跳过，macOS 上 35 项全部运行。
 
 测试构成：`tests/native.test.mjs` 是 macOS 原生扫描用例，`tests/windows.test.mjs` 是 Windows 导出与 CSV 用例，`tests/print-config.test.mjs` 覆盖注册配置生成脚本（输出必须全是绝对路径、不得残留占位符文本；`dist/index.js` 缺失时以退出码 1 拒绝生成；参数写错要报错而不是静默输出空配置），`tests/schema.test.mjs` 在真实 stdio 会话里核工具入参 schema（发布的类型必须是单一 `boolean` / `integer`，字符串化的标量要被接受，乱写的值要报错并点出参数名）。
 

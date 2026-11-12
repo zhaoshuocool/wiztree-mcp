@@ -63,7 +63,10 @@ const server = new McpServer({
     "old_large_files, extension_summary and compare_csv. Scan one directory, never a whole drive: scans " +
     "above maxEntries (100000 rows by default, 200000 maximum) abort and discard everything parsed. " +
     "Only the newest scan handle survives in this process, so saveSnapshot before comparing two scans. " +
-    "admin:true raises a Windows UAC prompt and blocks unattended runs.",
+    "admin:true raises a Windows UAC prompt and blocks unattended runs. " +
+    "Argument names are exactly those published by tools/list and are camelCase: targetPath, includeFiles, " +
+    "includeFolders, maxEntries, timeoutSeconds. There is no path, max_depth, timeout or snake_case variant, " +
+    "and no depth limit; the row budget is maxEntries.",
 });
 
 function textResult(text: string) {
